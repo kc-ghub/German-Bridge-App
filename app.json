@@ -1,0 +1,16 @@
+{
+  "expo": {
+    "name": "German Bridge",
+    "slug": "german-bridge-app",
+    "version": "1.0.0",
+    "orientation": "landscape",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "resizeMode": "contain",
+      "backgroundColor": "#111827"
+    },
+    "ios": {
+      "supportsTablet": true
+    }
+  }
+}

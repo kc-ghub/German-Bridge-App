@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>German Bridge UI Wireframe Preview</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-900 text-white font-sans h-screen flex flex-col justify-between overflow-hidden select-none">
+
+    <!-- TOP HUD BAR -->
+    <div class="bg-gray-800/90 border-b border-gray-700 px-6 py-3 flex justify-between items-center z-10">
+        <div class="flex items-center space-x-6">
+            <span class="text-yellow-400 font-bold tracking-wider text-sm bg-yellow-950/50 px-3 py-1 rounded border border-yellow-700/40">
+                GERMAN BRIDGE / 德國橋牌
+            </span>
+            <div class="flex items-center space-x-2 text-sm text-gray-300">
+                <span class="bg-gray-700 px-2 py-0.5 rounded">ROUND 5 / 25</span>
+                <span class="bg-red-950 text-red-400 border border-red-800 px-2 py-0.5 rounded font-bold">TRUMP: ♥ HEARTS</span>
+            </div>
+        </div>
+        <div class="flex items-center space-x-3">
+            <button class="bg-emerald-700 text-xs px-3 py-1.5 rounded font-semibold hover:bg-emerald-600 transition">Voice Chat Active</button>
+            <button class="bg-gray-700 text-xs p-1.5 rounded hover:bg-gray-600">🎙️ Mute</button>
+        </div>
+    </div>
+
+    <!-- MAIN GAME BOARD (VIRTUAL FELT TABLE) -->
+    <div class="relative flex-1 bg-gradient-to-b from-emerald-900 via-emerald-800 to-emerald-950 p-6 flex items-center justify-center">
+        
+        <!-- OPPONENT 2 (TOP LEFT) -->
+        <div class="absolute top-6 left-12 bg-black/40 border border-gray-600/30 p-3 rounded-xl flex items-center space-x-3 w-44">
+            <div class="w-12 h-12 bg-orange-500 rounded-full border-2 border-white flex items-center justify-center text-xl font-bold">🧑</div>
+            <div>
+                <div class="font-bold text-sm truncate">Ah Ming</div>
+                <div class="text-xs text-yellow-400">Bid: 2 | Won: 1</div>
+                <div class="text-[10px] text-gray-300 bg-gray-800 px-1.5 py-0.5 rounded mt-1 inline-block">住仙 Resident</div>
+            </div>
+        </div>
+
+        <!-- OPPONENT 3 (TOP CENTER) -->
+        <div class="absolute top-4 bg-black/40 border border-gray-600/30 p-3 rounded-xl flex items-center space-x-3 w-44">
+            <div class="w-12 h-12 bg-blue-500 rounded-full border-2 border-white flex items-center justify-center text-xl font-bold">👩</div>
+            <div>
+                <div class="font-bold text-sm truncate">Chloe</div>
+                <div class="text-xs text-yellow-400">Bid: 0 | Won: 0</div>
+                <div class="text-[10px] text-purple-400 bg-purple-950/60 border border-purple-800 px-1.5 py-0.5 rounded mt-1 inline-block">莊主 President</div>
+            </div>
+        </div>
+
+        <!-- OPPONENT 4 (TOP RIGHT) -->
+        <div class="absolute top-6 right-12 bg-black/40 border border-gray-600/30 p-3 rounded-xl flex items-center space-x-3 w-44">
+            <div class="w-12 h-12 bg-purple-500 rounded-full border-2 border-white flex items-center justify-center text-xl font-bold">🤖</div>
+            <div>
+                <div class="font-bold text-sm truncate">Bot David</div>
+                <div class="text-xs text-red-400">Bid: 4 | Won: 1 💥</div>
+                <div class="text-[10px] text-gray-400 bg-gray-800 px-1.5 py-0.5 rounded mt-1 inline-block">AI Player</div>
+            </div>
+        </div>
+
+        <!-- CENTRAL TRICK POOL (WHERE CARDS FLOATING) -->
+        <div class="w-72 h-48 bg-emerald-950/60 border border-emerald-600/40 rounded-2xl relative shadow-2xl flex items-center justify-center">
+            <div class="absolute inset-0 flex items-center justify-center text-emerald-800/40 font-bold tracking-widest text-sm pointer-events-none">
+                TRICK TRACKER
+            </div>
+            
+            <!-- Ah Ming's played card -->
+            <div class="absolute top-2 left-16 bg-white text-black w-10 h-14 rounded shadow-lg border border-gray-300 flex flex-col justify-between p-1 font-bold transform -rotate-12">
+                <span class="text-xs text-red-600 leading-none">5♥</span>
+                <span class="text-right text-xs text-red-600 leading-none">♥</span>
+            </div>
+
+            <!-- Chloe's played card -->
+            <div class="absolute top-4 right-16 bg-white text-black w-10 h-14 rounded shadow-lg border border-gray-300 flex flex-col justify-between p-1 font-bold transform rotate-6">
+                <span class="text-xs text-black leading-none">A♠</span>
+                <span class="text-right text-xs text-black leading-none">♠</span>
+            </div>
+
+            <!-- Bot David's played card -->
+            <div class="absolute bottom-4 right-20 bg-white text-black w-10 h-14 rounded shadow-lg border border-gray-300 flex flex-col justify-between p-1 font-bold transform -rotate-6">
+                <span class="text-xs text-black leading-none">10♠</span>
+                <span class="text-right text-xs text-black leading-none">♠</span>
+            </div>
+
+            <!-- Your played card placeholder (Waiting for you) -->
+            <div class="absolute bottom-2 left-20 border-2 border-dashed border-yellow-500/60 w-10 h-14 rounded flex items-center justify-center text-yellow-500/60 font-bold text-xs bg-yellow-500/5">
+                YOU
+            </div>
+        </div>
+
+    </div>
+
+    <!-- ACTION ZONE & PLAYER HAND (BOTTOM REGION) -->
+    <div class="bg-gray-900/95 border-t border-gray-800 p-4 flex flex-col items-center space-y-3 z-10">
+        
+        <!-- GAME CONTEXT / THE HOOK NOTIFICATION -->
+        <div class="text-center">
+            <span class="text-xs font-semibold uppercase tracking-wider text-yellow-500 animate-pulse bg-yellow-950/50 px-4 py-1 rounded-full border border-yellow-800/30">
+                Your Turn to Play! Led Suit is ♠ Spades. Must Follow Suit.
+            </span>
+        </div>
+
+        <!-- PLAYER FOOTER DATA SPLIT -->
+        <div class="w-full max-w-4xl flex justify-between items-center px-4">
+            <!-- User Status Info -->
+            <div class="flex items-center space-x-3 w-1/4">
+                <div class="w-10 h-10 bg-emerald-500 rounded-full border border-white flex items-center justify-center text-lg font-bold">😎</div>
+                <div>
+                    <div class="font-bold text-xs">You (Host)</div>
+                    <div class="text-[11px] text-yellow-400">Bid: 3 | Won: 2</div>
+                </div>
+            </div>
+
+            <!-- CARDS INTRACTIVE DISPLAY CONTAINER -->
+            <div class="flex justify-center items-center space-x-[-12px] py-1 w-2/4">
+                
+                <!-- Card 1 (Valid to play) -->
+                <div class="bg-white text-black w-14 h-20 rounded-lg shadow-xl border border-gray-300 flex flex-col justify-between p-1.5 font-bold transform hover:-translate-y-4 hover:scale-105 transition cursor-pointer">
+                    <span class="text-sm text-black leading-none">K♠</span>
+                    <span class="text-right text-sm text-black leading-none">♠</span>
+                </div>
+
+                <!-- Card 2 (Valid to play) -->
+                <div class="bg-white text-black w-14 h-20 rounded-lg shadow-xl border border-gray-300 flex flex-col justify-between p-1.5 font-bold transform hover:-translate-y-4 hover:scale-105 transition cursor-pointer">
+                    <span class="text-sm text-black leading-none">7♠</span>
+                    <span class="text-right text-sm text-black leading-none">♠</span>
+                </div>
+
+                <!-- Card 3 (Locked out / Dimmed because player must follow suit) -->
+                <div class="bg-white/40 text-black/30 w-14 h-20 rounded-lg shadow-xl border border-gray-700/20 flex flex-col justify-between p-1.5 font-bold opacity-40 pointer-events-none transform translate-y-2">
+                    <span class="text-sm text-red-600/30 leading-none">Q♦</span>
+                    <span class="text-right text-sm text-red-600/30 leading-none">♦</span>
+                </div>
+
+                <!-- Card 4 (Locked out / Dimmed) -->
+                <div class="bg-white/40 text-black/30 w-14 h-20 rounded-lg shadow-xl border border-gray-700/20 flex flex-col justify-between p-1.5 font-bold opacity-40 pointer-events-none transform translate-y-2">
+                    <span class="text-sm text-black/30 leading-none">4♣</span>
+                    <span class="text-right text-sm text-black/30 leading-none">♣</span>
+                </div>
+
+            </div>
+
+            <!-- SCORE BOARD BOX -->
+            <div class="w-1/4 flex justify-end">
+                <div class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-right text-xs">
+                    <div class="text-gray-400 text-[10px] font-bold uppercase">Current Match Score</div>
+                    <div class="font-mono text-yellow-400 font-bold">You: 42pts | Chloe: 38pts</div>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+</body>
+</html>
