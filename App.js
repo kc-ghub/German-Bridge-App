@@ -7,7 +7,8 @@ import {
   TouchableOpacity, 
   ScrollView, 
   ActivityIndicator,
-  Alert
+  Alert,
+  Modal
 } from 'react-native';
 import { supabase } from './supabaseClient';
 import { 
@@ -26,23 +27,23 @@ import {
 
 // Session persistence helpers
 const saveSession = (key, val) => {
-  if (typeof window !== 'undefined' && window.sessionStorage) {
-    if (val) window.sessionStorage.setItem(key, JSON.stringify(val));
-    else window.sessionStorage.removeItem(key);
+  if (typeof window !== 'undefined' && window.localStorage) {
+    if (val) window.localStorage.setItem(key, JSON.stringify(val));
+    else window.localStorage.removeItem(key);
   }
 };
 
 const getSession = (key) => {
-  if (typeof window !== 'undefined' && window.sessionStorage) {
-    try {
-      const item = window.sessionStorage.getItem(key);
-      return item ? JSON.parse(item) : null;
-    } catch {
-      return null;
+    if (typeof window !== 'undefined' && window.localStorage) {
+      try {
+        const item = window.localStorage.getItem(key);
+        return item ? JSON.parse(item) : null;
+      } catch {
+        return null;
+      }
     }
-  }
-  return null;
-};
+    return null;
+  };
 
 export default function App() {
   // Session & User State
@@ -73,6 +74,18 @@ export default function App() {
 
   // Channel reference
   const channelRef = useRef(null);
+
+  // Scorecard Modal State
+  const [showScoreModal, setShowScoreModal] = useState(false);
+
+  // Helper to get player name by seat or ID
+  const getPlayerName = (identifier) => {
+    const playersList = currentRoom?.game_state?.players || [];
+    const player = typeof identifier === 'number' 
+      ? playersList.find(p => p.seat_number === identifier)
+      : playersList.find(p => p.user_id === identifier);
+    return player?.nickname || (typeof identifier === 'number' ? `Seat ${identifier}` : 'Player');
+  };
 
   // 1. Initialize Anonymous Session & Prioritize Deep-Link URL Over Stale Sessions
   useEffect(() => {
@@ -382,10 +395,15 @@ export default function App() {
   const handleLeaveTable = async () => {
     const isHost = currentRoom && currentRoom.host_id === userId;
 
-    if (isHost && currentRoom.status === 'lobby') {
-      const confirmed = window.confirm(
-        'Warning: Leaving will close this table and remove all waiting players from the lobby. Are you sure you want to close the game?'
-      );
+    if (currentRoom.status === 'lobby') {
+      if (isHost) {
+        const confirmed = window.confirm(
+          'Warning: Leaving will close this table and remove all waiting players from the lobby. Are you sure you want to close the game?'
+        );
+        if (!confirmed) return;
+      }
+    } else if (currentRoom.status === 'playing') {
+      const confirmed = window.confirm('Are you sure you want to exit the game?');
       if (!confirmed) return;
     }
 
@@ -462,6 +480,7 @@ export default function App() {
         lastTrickResult: null,
         roundScores: {},
         cumulativeScores: {},
+        scoreHistory: [],
         phase: 'bidding',
         config: {
           requireManualNextRound: false,
@@ -570,6 +589,7 @@ export default function App() {
       let lastTrickResult = gs.lastTrickResult || null;
       let roundScores = gs.roundScores || {};
       let cumulativeScores = { ...(gs.cumulativeScores || {}) };
+      let updatedScoreHistory = gs.scoreHistory || [];
 
       if (updatedTrick.length === gs.players.length) {
         const winnerId = resolveTrickWinner(updatedTrick, gs.isNoTrump ? null : gs.trumpCard);
@@ -590,6 +610,16 @@ export default function App() {
             roundScores[p.user_id] = pts;
             cumulativeScores[p.user_id] = (cumulativeScores[p.user_id] || 0) + pts;
           });
+
+          const roundRecord = {
+            roundNumber: gs.roundNumber,
+            cardsDealt: gs.cardsDealt,
+            bids: gs.bids,
+            tricksWon: updatedTricksWon,
+            roundScores: roundScores,
+            cumulativeScores: cumulativeScores,
+          };
+          updatedScoreHistory = [...(gs.scoreHistory || []), roundRecord];
         }
       }
 
@@ -602,6 +632,7 @@ export default function App() {
         tricksWon: updatedTricksWon,
         roundScores,
         cumulativeScores,
+        scoreHistory: updatedScoreHistory,
         phase: nextPhase,
       };
 
@@ -897,17 +928,106 @@ export default function App() {
             </View>
           )}
 
-          <TouchableOpacity style={styles.cancelButton} onPress={handleLeaveTable}>
+          <TouchableOpacity style={[styles.cancelButton, currentRoom.status === 'playing' && styles.buttonSmall]} onPress={handleLeaveTable}>
             <Text style={styles.btnText}>Leave Table</Text>
           </TouchableOpacity>
         </View>
       )}
 
+      {/* FULL MATCH SCORECARD MODAL */}
+      <Modal
+        visible={showScoreModal}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setShowScoreModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.scoreModalContent}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+              <Text style={{ fontSize: 18, fontWeight: '800', color: '#ffffff' }}>📜 Match Scorecard</Text>
+              <TouchableOpacity onPress={() => setShowScoreModal(false)} style={{ padding: 6 }}>
+                <Text style={{ color: '#9ca3af', fontSize: 20, fontWeight: '700' }}>✕</Text>
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView style={{ maxHeight: 380 }}>
+              {(!currentRoom?.game_state?.scoreHistory || currentRoom.game_state.scoreHistory.length === 0) ? (
+                <Text style={{ color: '#9ca3af', fontStyle: 'italic', textAlign: 'center', paddingVertical: 24 }}>
+                  No completed rounds yet. Scores will be logged here after Round 1 concludes.
+                </Text>
+              ) : (
+                <View>
+                  {/* Table Column Headers */}
+                  <View style={{ flexDirection: 'row', borderBottomWidth: 1, borderColor: '#334155', paddingBottom: 6, marginBottom: 6 }}>
+                    <Text style={{ flex: 1.1, color: '#9ca3af', fontSize: 11, fontWeight: '700' }}>Round</Text>
+                    {[...(currentRoom.game_state?.players || [])]
+                      .sort((a, b) => a.seat_number - b.seat_number)
+                      .map(p => (
+                        <Text key={p.user_id} style={{ flex: 1.4, color: '#9ca3af', fontSize: 11, fontWeight: '700', textAlign: 'center' }} numberOfLines={1}>
+                          {p.nickname || 'Player'}
+                        </Text>
+                      ))}
+                  </View>
+
+                  {/* Cumulative Scores Row */}
+                  <View style={{ flexDirection: 'row', paddingBottom: 6, borderBottomWidth: 1, borderColor: '#334155', marginBottom: 6 }}>
+                    <Text style={{ flex: 1.1, color: '#f3f4f6', fontSize: 11, fontWeight: '800' }}>TOTAL</Text>
+                    {[...(currentRoom.game_state?.players || [])]
+                      .sort((a, b) => a.seat_number - b.seat_number)
+                      .map(p => (
+                      <Text key={p.user_id} style={{ flex: 1.4, color: '#60a5fa', fontSize: 12, fontWeight: '800', textAlign: 'center' }}>
+                          {currentRoom.game_state.cumulativeScores?.[p.user_id] || 0}
+                      </Text>
+                    ))}
+                  </View>
+
+                  {/* Round Rows */}
+                  {currentRoom.game_state.scoreHistory.map(record => (
+                    <View key={record.roundNumber} style={{ flexDirection: 'row', paddingVertical: 5, borderBottomWidth: 1, borderColor: '#1e293b', alignItems: 'center' }}>
+                      <Text style={{ flex: 1.1, color: '#f3f4f6', fontSize: 11, fontWeight: '600' }}>
+                        R{record.roundNumber}
+                      </Text>
+                      {[...(currentRoom.game_state?.players || [])]
+                        .sort((a, b) => a.seat_number - b.seat_number)
+                        .map(p => {
+                          const bid = record.bids?.[p.user_id] ?? 0;
+                          const won = record.tricksWon?.[p.user_id] ?? 0;
+                          const pts = record.roundScores?.[p.user_id] ?? 0;
+                          const total = record.cumulativeScores?.[p.user_id] ?? 0;
+                          const isSuccess = bid === won;
+
+                          return (
+                            <View key={p.user_id} style={{ flex: 1.4, alignItems: 'center' }}>
+                              <Text style={{ fontSize: 10, color: '#9ca3af' }}>
+                                {bid}/{won} <Text style={{ color: isSuccess ? '#10b981' : '#ef4444', fontWeight: '700' }}>{pts >= 0 ? `+${pts}` : pts}</Text>
+                              </Text>
+                              <Text style={{ fontSize: 11, color: '#60a5fa', fontWeight: '800' }}>
+                                {total}
+                              </Text>
+                            </View>
+                          );
+                        })}
+                    </View>
+                  ))}
+                </View>
+              )}
+            </ScrollView>
+
+            <TouchableOpacity 
+              style={[styles.button, { marginTop: 14, backgroundColor: '#334155', paddingVertical: 10 }]} 
+              onPress={() => setShowScoreModal(false)}
+            >
+              <Text style={styles.btnText}>Close Scorecard</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
       {/* ACTIVE GAME TABLE */}
       {currentRoom && currentRoom.status === 'playing' && (
         <View style={styles.cardWide}>
           
-          {/* Header & Trump Card */}
+          {/* Header & Trump Card & Scorecard Trigger */}
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
             <View>
               <Text style={{ fontSize: 22, fontWeight: '800', color: '#ffffff' }}>Desk #{currentRoom.id}</Text>
@@ -915,21 +1035,63 @@ export default function App() {
                 Round {currentRoom.game_state?.roundNumber || 1} of {currentRoom.game_state?.totalRounds || 1} • {currentRoom.game_state?.cardsDealt || 1} Cards • {currentRoom.game_state?.mode?.toUpperCase()}
               </Text>
             </View>
-            <View style={{ backgroundColor: '#0f172a', padding: 8, borderRadius: 8, borderWidth: 1, borderColor: '#10b981' }}>
-              <Text style={{ color: '#10b981', fontWeight: '700', fontSize: 13 }}>
-                {currentRoom.game_state?.isNoTrump 
-                  ? 'TRUMP: NO TRUMP' 
-                  : `TRUMP: ${currentRoom.game_state?.trumpCard?.suit === 'Spades' ? '♠' : currentRoom.game_state?.trumpCard?.suit === 'Hearts' ? '♥' : currentRoom.game_state?.trumpCard?.suit === 'Diamonds' ? '♦' : '♣'} ${currentRoom.game_state?.trumpCard?.rank} of ${currentRoom.game_state?.trumpCard?.suit}`}
-              </Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <TouchableOpacity 
+                style={{ backgroundColor: '#1e293b', paddingVertical: 8, paddingHorizontal: 12, borderRadius: 8, borderWidth: 1, borderColor: '#475569' }}
+                onPress={() => setShowScoreModal(true)}
+              >
+                <Text style={{ color: '#38bdf8', fontSize: 13, fontWeight: '700' }}>📊 Scorecard</Text>
+              </TouchableOpacity>
+              <View style={{ alignItems: 'center' }}>
+                <Text style={{ color: '#10b981', fontWeight: '700', fontSize: 11, marginBottom: 4 }}>TRUMP</Text>
+                {currentRoom.game_state?.isNoTrump ? (
+                  <View style={{ backgroundColor: '#0f172a', paddingVertical: 16, paddingHorizontal: 12, borderRadius: 6, borderWidth: 1, borderColor: '#334155', alignItems: 'center', justifyContent: 'center', minWidth: 60 }}>
+                    <Text style={{ color: '#9ca3af', fontWeight: '600', fontSize: 12 }}>NO</Text>
+                    <Text style={{ color: '#9ca3af', fontWeight: '600', fontSize: 12 }}>TRUMP</Text>
+                  </View>
+                ) : (
+                  <View style={{ backgroundColor: '#ffffff', width: 60, height: 85, borderRadius: 6, borderWidth: 1, borderColor: '#d1d5db', alignItems: 'center', justifyContent: 'center', elevation: 3, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.2, shadowRadius: 2 }}>
+                    <Text style={{ color: (currentRoom.game_state?.trumpCard?.suit === 'Hearts' || currentRoom.game_state?.trumpCard?.suit === 'Diamonds') ? '#ef4444' : '#111827', fontWeight: 'bold', fontSize: 18, position: 'absolute', top: 6, left: 6 }}>
+                      {currentRoom.game_state?.trumpCard?.rank}
+                    </Text>
+                    <Text style={{ fontSize: 24 }}>
+                      {currentRoom.game_state?.trumpCard?.suit === 'Spades' ? '♠️' : currentRoom.game_state?.trumpCard?.suit === 'Hearts' ? '♥️' : currentRoom.game_state?.trumpCard?.suit === 'Diamonds' ? '♦️' : '♣️'}
+                    </Text>
+                  </View>
+                )}
+              </View>
             </View>
           </View>
 
           {/* Opponents HUD (Shows ⭐ Lead on Initiative Seat, Not Host) */}
-          <View style={{ flexDirection: 'row', justifyContent: 'center', gap: 10, marginBottom: 16 }}>
+          <View style={{ minHeight: 80, width: '100%', justifyContent: 'center', alignItems: 'center', marginBottom: 16, position: 'relative' }}>
             {currentRoom.game_state?.players?.filter(p => p.user_id !== userId).map(p => {
+              const mySeat = currentRoom.game_state.players.find(pl => pl.user_id === userId)?.seat_number;
+              const totalPlayers = currentRoom.game_state.players.length;
+              const seatDiff = (p.seat_number - mySeat + totalPlayers) % totalPlayers;
+
+              let positionStyle = { position: 'absolute' };
+              // "Table" positioning logic for 4 players (1 top, 1 left, 1 right)
+              if (totalPlayers === 4) {
+                if (seatDiff === 1) positionStyle = { ...positionStyle, left: '5%', top: '50%', transform: [{ translateY: '-50%' }] }; // Left
+                if (seatDiff === 2) positionStyle = { ...positionStyle, top: 0, left: '50%', transform: [{ translateX: '-50%' }] }; // Top
+                if (seatDiff === 3) positionStyle = { ...positionStyle, right: '5%', top: '50%', transform: [{ translateY: '-50%' }] }; // Right
+              } else {
+                // Fallback to a row at the top for other player counts
+                const opponents = currentRoom.game_state.players.filter(pl => pl.user_id !== userId);
+                const playerIndex = opponents.findIndex(pl => pl.user_id === p.user_id);
+                const numOpponents = opponents.length;
+                const totalWidth = numOpponents * 110; // 95 width + 15 gap
+                const startOffset = -totalWidth / 2;
+                const itemOffset = playerIndex * 110;
+                positionStyle = { ...positionStyle, top: 0, left: '50%', transform: [{ translateX: startOffset + itemOffset }] };
+              }
+
               const isInitiative = p.seat_number === currentRoom.game_state?.initiativeSeat;
+              const isActive = p.seat_number === currentRoom.game_state?.activeSeat;
+
               return (
-                <View key={p.user_id} style={{ backgroundColor: '#0f172a', padding: 8, borderRadius: 8, borderWidth: 1, borderColor: isInitiative ? '#eab308' : '#334155', alignItems: 'center', minWidth: 95 }}>
+                <View key={p.user_id} style={[{ backgroundColor: '#0f172a', padding: 8, borderRadius: 8, borderWidth: 2, borderColor: isActive ? '#3b82f6' : (isInitiative ? '#eab308' : '#334155'), alignItems: 'center', minWidth: 95, zIndex: 10 }, positionStyle]}>
                   <Text style={{ color: '#ffffff', fontWeight: '600', fontSize: 12 }}>
                     {p.seat_number}. {p.nickname || 'Player'}{isInitiative ? ' ⭐' : ''}
                   </Text>
@@ -948,7 +1110,7 @@ export default function App() {
                 <Text style={styles.centerArenaTitle}>
                   {currentRoom.game_state.activeSeat === (currentRoom.game_state.players?.find(p => p.user_id === userId)?.seat_number)
                     ? "👉 It's Your Turn to Bid!"
-                    : `Waiting for Seat ${currentRoom.game_state.activeSeat} to Bid...`}
+                    : `Waiting for ${getPlayerName(currentRoom.game_state.activeSeat)} to Bid...`}
                 </Text>
 
                 {/* Display Current Bids */}
@@ -958,7 +1120,7 @@ export default function App() {
                     const hasBid = playerBid !== undefined;
                     return (
                       <View key={p.user_id} style={{ alignItems: 'center', minWidth: 50, padding: 6, backgroundColor: '#1e293b', borderRadius: 6, borderWidth: 1, borderColor: '#334155' }}>
-                        <Text style={{ color: '#9ca3af', fontSize: 11 }}>Seat {p.seat_number}</Text>
+                        <Text style={{ color: '#9ca3af', fontSize: 11 }} numberOfLines={1}>{getPlayerName(p.user_id)}</Text>
                         <Text style={{ color: hasBid ? '#10b981' : '#64748b', fontSize: 16, fontWeight: '800', marginTop: 2 }}>
                           {hasBid ? playerBid : '?'}
                         </Text>
@@ -1003,7 +1165,7 @@ export default function App() {
                 <Text style={styles.centerArenaTitle}>
                   {currentRoom.game_state.activeSeat === (currentRoom.game_state.players?.find(p => p.user_id === userId)?.seat_number)
                     ? "👉 It's Your Turn to Play!"
-                    : `Waiting for Seat ${currentRoom.game_state.activeSeat} to Play...`}
+                    : `Waiting for ${getPlayerName(currentRoom.game_state.activeSeat)} to Play...`}
                 </Text>
 
                 {/* Center Trick Arena Pool */}
@@ -1043,14 +1205,14 @@ export default function App() {
                 <Text style={styles.centerArenaTitle}>🏆 Round {currentRoom.game_state.roundNumber} Complete</Text>
                 {currentRoom.game_state?.lastTrickResult && (
                   <Text style={{ color: '#60a5fa', fontWeight: '700', fontSize: 13, marginBottom: 8 }}>
-                    Final Trick Won by Seat {currentRoom.game_state.lastTrickResult.winnerSeat} (Takes Round {currentRoom.game_state.roundNumber + 1} Lead)
+                    Final Trick Won by ${getPlayerName(currentRoom.game_state.lastTrickResult.winnerId)} (Takes Round {currentRoom.game_state.roundNumber + 1} Lead)
                   </Text>
                 )}
 
                 {/* Scoreboard Table */}
                 <View style={{ width: '95%', backgroundColor: '#0f172a', borderRadius: 8, padding: 8, borderWidth: 1, borderColor: '#334155', marginVertical: 6 }}>
                   <View style={{ flexDirection: 'row', borderBottomWidth: 1, borderColor: '#1e293b', paddingBottom: 4, marginBottom: 4 }}>
-                    <Text style={{ flex: 1.2, color: '#9ca3af', fontSize: 11, fontWeight: '700' }}>SEAT</Text>
+                    <Text style={{ flex: 1.2, color: '#9ca3af', fontSize: 11, fontWeight: '700' }}>PLAYER</Text>
                     <Text style={{ flex: 1, color: '#9ca3af', fontSize: 11, fontWeight: '700', textAlign: 'center' }}>BID</Text>
                     <Text style={{ flex: 1, color: '#9ca3af', fontSize: 11, fontWeight: '700', textAlign: 'center' }}>WON</Text>
                     <Text style={{ flex: 1.2, color: '#9ca3af', fontSize: 11, fontWeight: '700', textAlign: 'right' }}>ROUND</Text>
@@ -1065,7 +1227,7 @@ export default function App() {
 
                     return (
                       <View key={p.user_id} style={{ flexDirection: 'row', paddingVertical: 3 }}>
-                        <Text style={{ flex: 1.2, color: '#f3f4f6', fontSize: 12, fontWeight: '600' }}>Seat {p.seat_number}</Text>
+                        <Text style={{ flex: 1.2, color: '#f3f4f6', fontSize: 12, fontWeight: '600' }} numberOfLines={1}>{p.nickname || 'Player'}</Text>
                         <Text style={{ flex: 1, color: '#9ca3af', fontSize: 12, textAlign: 'center' }}>{bid}</Text>
                         <Text style={{ flex: 1, color: '#9ca3af', fontSize: 12, textAlign: 'center' }}>{won}</Text>
                         <Text style={{ flex: 1.2, color: isSuccess ? '#10b981' : '#ef4444', fontSize: 12, fontWeight: '700', textAlign: 'right' }}>
@@ -1119,11 +1281,20 @@ export default function App() {
             {(() => {
               const mySeat = currentRoom.game_state?.players?.find(p => p.user_id === userId)?.seat_number;
               const isLead = mySeat === currentRoom.game_state?.initiativeSeat;
+              const myBid = currentRoom.game_state?.bids?.[userId];
+              const myWon = currentRoom.game_state?.tricksWon?.[userId] ?? 0;
               return (
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 }}>
-                  <Text style={{ color: '#ffffff', fontWeight: '700' }}>
-                    Your Hand (Seat {mySeat}{isLead ? ' ⭐ Lead' : ''})
-                  </Text>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                    <Text style={{ color: '#ffffff', fontWeight: '700', fontSize: 15 }}>
+                      Your Hand ({nickname || 'You'}{isLead ? ' ⭐ Lead' : ''})
+                    </Text>
+                    <View style={{ backgroundColor: '#0f172a', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, borderWidth: 1, borderColor: '#334155' }}>
+                      <Text style={{ color: '#38bdf8', fontSize: 12, fontWeight: '700' }}>
+                        Bid: {myBid !== undefined ? myBid : '—'} | Won: {myWon}
+                      </Text>
+                    </View>
+                  </View>
                   <Text style={{ color: '#9ca3af', fontSize: 12 }}>
                     {currentRoom.game_state?.hands?.[userId]?.length || 0} Cards
                   </Text>
@@ -1166,9 +1337,11 @@ export default function App() {
             </ScrollView>
           </View>
 
-          <TouchableOpacity style={[styles.cancelButton, { marginTop: 16 }]} onPress={handleLeaveTable}>
-            <Text style={styles.btnText}>Exit Game Table</Text>
-          </TouchableOpacity>
+          <View style={currentRoom.status === 'playing' ? { alignItems: 'center' } : {}}>
+            <TouchableOpacity style={[styles.cancelButton, { marginTop: 16 }]} onPress={handleLeaveTable}>
+              <Text style={styles.btnText}>Exit Game Table</Text>
+            </TouchableOpacity>
+          </View>
         </View>
       )}
     </ScrollView>
@@ -1187,6 +1360,7 @@ const styles = StyleSheet.create({
   label: { color: '#9ca3af', fontSize: 12, fontWeight: '600', marginBottom: 6, marginTop: 4 },
   input: { backgroundColor: '#0f172a', color: '#ffffff', padding: 12, borderRadius: 8, marginBottom: 12, borderWidth: 1, borderColor: '#4b5563', fontSize: 15 },
   button: { backgroundColor: '#2563eb', padding: 14, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
+  
   cancelButton: { backgroundColor: '#dc2626', padding: 12, borderRadius: 8, alignItems: 'center', marginTop: 12 },
   btnText: { color: '#ffffff', fontWeight: '700', fontSize: 15 },
   seatContainer: { gap: 10, marginVertical: 10 },
@@ -1202,5 +1376,7 @@ const styles = StyleSheet.create({
   centerArena: { backgroundColor: '#0f172a', padding: 20, borderRadius: 12, borderWidth: 1, borderColor: '#334155', alignItems: 'center', marginVertical: 10 },
   centerArenaTitle: { color: '#ffffff', fontSize: 18, fontWeight: '700', marginBottom: 6 },
   centerArenaSubText: { color: '#9ca3af', fontSize: 13, textAlign: 'center' },
-  cardPlaceholder: { width: 60, height: 85, borderRadius: 8, borderWidth: 1, borderColor: '#d1d5db', alignItems: 'center', justifyContent: 'center', elevation: 3, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 3 }
+  cardPlaceholder: { width: 60, height: 85, borderRadius: 8, borderWidth: 1, borderColor: '#d1d5db', alignItems: 'center', justifyContent: 'center', elevation: 3, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 3 },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.75)', justifyContent: 'center', alignItems: 'center', padding: 16 },
+  scoreModalContent: { backgroundColor: '#0f172a', borderRadius: 12, padding: 16, width: '100%', maxWidth: 580, borderWidth: 1, borderColor: '#334155' }
 });
