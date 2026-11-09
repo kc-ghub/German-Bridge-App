@@ -267,7 +267,11 @@ export default function App() {
       if (seconds <= 0) {
         clearInterval(timer);
         if (currentRoom.host_id === userId) {
-          handleNextRound();
+          if (currentRoom.game_state.roundNumber >= currentRoom.game_state.totalRounds) {
+            handleEndGame();
+          } else {
+            handleNextRound();
+          }
         }
       }
     }, 1000);
@@ -450,6 +454,7 @@ export default function App() {
     try {
       const effectiveMode = (currentRoom.round_mode || 'mountain').toLowerCase();
       const maxCards = getMaxCardsPerPlayer(players);
+      // const totalRounds = 2; // TEST OVERRIDE: Cap match at 2 rounds
       const totalRounds = getTotalRounds(effectiveMode, maxCards);
       const cardsDealt = getRoundCardsCount(effectiveMode, 1, maxCards);
       const dealResult = dealRound(players, cardsDealt);
@@ -649,10 +654,53 @@ export default function App() {
     }
   };
 
+  // Transition match to Final Standings
+  const handleEndGame = async () => {
+    if (!currentRoom?.game_state || currentRoom.host_id !== userId) return;
+    setLoading(true);
+    try {
+      const updatedGameState = {
+        ...currentRoom.game_state,
+        phase: 'game_over'
+      };
+      setCurrentRoom(prev => ({ ...prev, game_state: updatedGameState }));
+      await supabase
+        .from('rooms')
+        .update({ game_state: updatedGameState })
+        .eq('id', currentRoom.id);
+    } catch (err) {
+      setErrorLog(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Host resets table back to lobby for another game
+  const handleResetToLobby = async () => {
+    if (!currentRoom || currentRoom.host_id !== userId) return;
+    setLoading(true);
+    try {
+      const { error } = await supabase
+        .from('rooms')
+        .update({ status: 'lobby', game_state: null })
+        .eq('id', currentRoom.id);
+      if (error) throw error;
+    } catch (err) {
+      setErrorLog(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // 12. Next Round Progression (Auto/Manual Handler)
   const handleNextRound = async () => {
     if (!currentRoom?.game_state || currentRoom.host_id !== userId) return;
     const gs = currentRoom.game_state;
+
+    if (gs.roundNumber >= gs.totalRounds) {
+      handleEndGame();
+      return;
+    }
     if (gs.phase !== 'scoring') return;
 
     setLoading(true);
@@ -1199,13 +1247,12 @@ export default function App() {
                   )}
                 </View>
               </View>
-            ) : (
-              /* Phase 5 Scoring Screen with Countdown */
+            ) : currentRoom.game_state?.phase === 'scoring' ? (
               <View style={{ width: '100%', alignItems: 'center', paddingVertical: 6 }}>
                 <Text style={styles.centerArenaTitle}>🏆 Round {currentRoom.game_state.roundNumber} Complete</Text>
                 {currentRoom.game_state?.lastTrickResult && (
                   <Text style={{ color: '#60a5fa', fontWeight: '700', fontSize: 13, marginBottom: 8 }}>
-                    Final Trick Won by ${getPlayerName(currentRoom.game_state.lastTrickResult.winnerId)} (Takes Round {currentRoom.game_state.roundNumber + 1} Lead)
+                    Final Trick Won by {getPlayerName(currentRoom.game_state.lastTrickResult.winnerId)} (Takes Round {currentRoom.game_state.roundNumber + 1} Lead)
                   </Text>
                 )}
 
@@ -1241,39 +1288,154 @@ export default function App() {
                   })}
                 </View>
 
-                {/* Round Progression: Configurable Countdown or Manual Button */}
-                {currentRoom.game_state?.config?.requireManualNextRound ? (
-                  currentRoom.host_id === userId ? (
-                    <TouchableOpacity
-                      style={[styles.button, { backgroundColor: '#10b981', marginTop: 10, paddingVertical: 10, paddingHorizontal: 22 }]}
-                      onPress={handleNextRound}
-                    >
-                      <Text style={styles.btnText}>
-                        ▶ Start Round {currentRoom.game_state.roundNumber + 1}
-                      </Text>
-                    </TouchableOpacity>
-                  ) : (
-                    <Text style={{ color: '#9ca3af', fontSize: 12, fontStyle: 'italic', marginTop: 10 }}>
-                      Waiting for Host to start Round {currentRoom.game_state.roundNumber + 1}...
+                {/* Round Progression or Final Standings Trigger */}
+                {currentRoom.game_state.roundNumber >= currentRoom.game_state.totalRounds ? (
+                  <View style={{ alignItems: 'center', marginTop: 12 }}>
+                    <Text style={{ color: '#eab308', fontSize: 16, fontWeight: '800' }}>
+                      🏆 All {currentRoom.game_state.totalRounds} Rounds Completed!
                     </Text>
-                  )
-                ) : (
-                  <View style={{ alignItems: 'center', marginTop: 10 }}>
-                    <Text style={{ color: '#38bdf8', fontSize: 14, fontWeight: '700' }}>
-                      ⏱ Round {currentRoom.game_state.roundNumber + 1} starting in {roundCountdown !== null ? roundCountdown : 5}s...
+                    <Text style={{ color: '#38bdf8', fontSize: 13, marginTop: 4 }}>
+                      Showing Final Standings in {roundCountdown !== null ? roundCountdown : 5}s...
                     </Text>
                     {currentRoom.host_id === userId && (
                       <TouchableOpacity
-                        style={[styles.button, { backgroundColor: '#2563eb', marginTop: 8, paddingVertical: 6, paddingHorizontal: 16 }]}
-                        onPress={handleNextRound}
+                        style={[styles.button, { backgroundColor: '#eab308', marginTop: 10, paddingVertical: 8, paddingHorizontal: 20 }]}
+                        onPress={handleEndGame}
                       >
-                        <Text style={[styles.btnText, { fontSize: 13 }]}>Deal Now ⏭</Text>
+                        <Text style={[styles.btnText, { color: '#0f172a', fontWeight: '800' }]}>
+                          🏆 View Final Podium Now
+                        </Text>
                       </TouchableOpacity>
                     )}
                   </View>
+                ) : (
+                  currentRoom.game_state?.config?.requireManualNextRound ? (
+                    currentRoom.host_id === userId ? (
+                      <TouchableOpacity
+                        style={[styles.button, { backgroundColor: '#10b981', marginTop: 10, paddingVertical: 10, paddingHorizontal: 22 }]}
+                        onPress={handleNextRound}
+                      >
+                        <Text style={styles.btnText}>
+                          ▶ Start Round {currentRoom.game_state.roundNumber + 1}
+                        </Text>
+                      </TouchableOpacity>
+                    ) : (
+                      <Text style={{ color: '#9ca3af', fontSize: 12, fontStyle: 'italic', marginTop: 10 }}>
+                        Waiting for Host to start Round {currentRoom.game_state.roundNumber + 1}...
+                      </Text>
+                    )
+                  ) : (
+                    <View style={{ alignItems: 'center', marginTop: 10 }}>
+                      <Text style={{ color: '#38bdf8', fontSize: 14, fontWeight: '700' }}>
+                        ⏱ Round {currentRoom.game_state.roundNumber + 1} starting in {roundCountdown !== null ? roundCountdown : 5}s...
+                      </Text>
+                      {currentRoom.host_id === userId && (
+                        <TouchableOpacity
+                          style={[styles.button, { backgroundColor: '#2563eb', marginTop: 8, paddingVertical: 6, paddingHorizontal: 16 }]}
+                          onPress={handleNextRound}
+                        >
+                          <Text style={[styles.btnText, { fontSize: 13 }]}>Deal Now ⏭</Text>
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                  )
                 )}
               </View>
-            )}
+            ) : currentRoom.game_state?.phase === 'game_over' ? (
+              <View style={{ width: '100%', alignItems: 'center', paddingVertical: 10 }}>
+                <Text style={{ fontSize: 28, fontWeight: '900', color: '#eab308', marginBottom: 4 }}>
+                  👑 Match Finished!
+                </Text>
+                <Text style={{ color: '#9ca3af', fontSize: 13, marginBottom: 16 }}>
+                  Final Leaderboard after {currentRoom.game_state.totalRounds} Rounds
+                </Text>
+
+                {/* Final Ranked Podium */}
+                <View style={{ width: '95%', backgroundColor: '#0f172a', borderRadius: 10, padding: 12, borderWidth: 1, borderColor: '#334155' }}>
+                  {(() => {
+                    const gs = currentRoom.game_state;
+                    if (!gs) return null;
+
+                    const sortedPlayers = [...(gs.players || [])]
+                      .sort((a, b) => (gs.cumulativeScores?.[b.user_id] || 0) - (gs.cumulativeScores?.[a.user_id] || 0));
+
+                    if (sortedPlayers.length === 0) return null;
+
+                    const rankedPlayers = [];
+                    let rank = 1;
+                    for (let i = 0; i < sortedPlayers.length; i++) {
+                      if (i > 0 && (gs.cumulativeScores?.[sortedPlayers[i].user_id] || 0) < (gs.cumulativeScores?.[sortedPlayers[i-1].user_id] || 0)) {
+                        rank = i + 1;
+                      }
+                      rankedPlayers.push({
+                        player: sortedPlayers[i],
+                        score: gs.cumulativeScores?.[sortedPlayers[i].user_id] || 0,
+                        rank: rank
+                      });
+                    }
+
+                    const highestScore = rankedPlayers.length > 0 ? rankedPlayers[0].score : 0;
+
+                    return rankedPlayers.map(({ player, score, rank }, idx) => {
+                      const isWinner = score === highestScore && highestScore > 0;
+                      
+                      let medal;
+                      if (rank === 1) medal = '🥇';
+                      else if (rank === 2) medal = '🥈';
+                      else if (rank === 3) medal = '🥉';
+                      else medal = `#${rank}`;
+
+                      return (
+                        <View 
+                          key={player.user_id} 
+                          style={{ 
+                            flexDirection: 'row', 
+                            justifyContent: 'space-between', 
+                            alignItems: 'center', 
+                            paddingVertical: 10, 
+                            borderBottomWidth: idx === rankedPlayers.length - 1 ? 0 : 1, 
+                            borderColor: '#1e293b' 
+                          }}
+                        >
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                            <Text style={{ fontSize: 18, fontWeight: '800', color: isWinner ? '#eab308' : '#9ca3af', width: 32, textAlign: 'center' }}>
+                              {medal}
+                            </Text>
+                            <Text style={{ color: isWinner ? '#ffffff' : '#e2e8f0', fontSize: 15, fontWeight: isWinner ? '800' : '600' }}>
+                              {player.nickname || player.profiles?.nickname || 'Player'}
+                              {isWinner ? ' (Winner 👑)' : ''}
+                            </Text>
+                          </View>
+                          <Text style={{ color: isWinner ? '#10b981' : '#60a5fa', fontSize: 18, fontWeight: '800' }}>
+                            {score} pts
+                          </Text>
+                        </View>
+                      );
+                    });
+                  })()}
+                </View>
+
+                {/* Host Controls & Scorecard Button */}
+                <View style={{ flexDirection: 'row', gap: 10, marginTop: 18 }}>
+                  <TouchableOpacity 
+                    style={[styles.button, { backgroundColor: '#1e293b', borderWidth: 1, borderColor: '#475569', paddingVertical: 10, paddingHorizontal: 16 }]}
+                    onPress={() => setShowScoreModal(true)}
+                  >
+                    <Text style={{ color: '#38bdf8', fontWeight: '700' }}>📊 View Scorecard</Text>
+                  </TouchableOpacity>
+
+                  {currentRoom.host_id === userId && (
+                    <TouchableOpacity 
+                      style={[styles.button, { backgroundColor: '#10b981', paddingVertical: 10, paddingHorizontal: 18 }]}
+                      onPress={handleResetToLobby}
+                    >
+                      <Text style={styles.btnText}>🔄 Return to Lobby</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              </View>
+            ) : null}
+
           </View>
 
           {/* Bottom HUD: Hand */}
