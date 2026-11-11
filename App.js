@@ -8,8 +8,13 @@ import {
   ScrollView, 
   ActivityIndicator,
   Alert,
+  Animated,
+  Easing,
   Modal
 } from 'react-native';
+
+// Create animated component ONCE outside the App component
+const AnimatedTouchable = Animated.createAnimatedComponent(TouchableOpacity);
 import { supabase } from './supabaseClient';
 import { 
   getMaxCardsPerPlayer, 
@@ -77,6 +82,17 @@ export default function App() {
 
   // Scorecard Modal State
   const [showScoreModal, setShowScoreModal] = useState(false);
+  
+  // Card selection and trick hold state
+  const [selectedCardIdx, setSelectedCardIdx] = useState(null);
+  const [trickHold, setTrickHold] = useState(false);
+  
+  // Card throw animation state and refs
+  const [animatingCardId, setAnimatingCardId] = useState(null);
+  const [hiddenCards, setHiddenCards] = useState(new Set());
+  const flyAnimY = useRef(new Animated.Value(0)).current;
+  const flyAnimScale = useRef(new Animated.Value(1)).current;
+  const flyAnimOpacity = useRef(new Animated.Value(1)).current;
 
   // Helper to get player name by seat or ID
   const getPlayerName = (identifier) => {
@@ -247,7 +263,7 @@ export default function App() {
 
   // 3. Automated Round Transition Countdown (Configurable: 5-15s or Manual)
   useEffect(() => {
-    if (currentRoom?.game_state?.phase !== 'scoring') {
+    if (currentRoom?.game_state?.phase !== 'scoring' || trickHold) {
       setRoundCountdown(null);
       return;
     }
@@ -278,6 +294,23 @@ export default function App() {
 
     return () => clearInterval(timer);
   }, [currentRoom?.game_state?.phase, currentRoom?.game_state?.roundNumber]);
+
+  // Trick hold timer for completed tricks
+  useEffect(() => {
+    if (currentRoom?.game_state?.lastTrickResult?.cards?.length) {
+      setTrickHold(true);
+      setSelectedCardIdx(null);
+      const timer = setTimeout(() => {
+        setTrickHold(false);
+      }, 2000);
+      return () => clearTimeout(timer);
+    }
+  }, [currentRoom?.game_state?.lastTrickResult?.cards]);
+
+  // Reset selection whenever active turn or phase changes
+  useEffect(() => {
+    setSelectedCardIdx(null);
+  }, [currentRoom?.game_state?.activeSeat, currentRoom?.game_state?.phase]);
 
   // 4. Host Authentication Handler ("funfam123999")
   const handleHostAuth = async () => {
@@ -1129,22 +1162,24 @@ export default function App() {
                 const opponents = currentRoom.game_state.players.filter(pl => pl.user_id !== userId);
                 const playerIndex = opponents.findIndex(pl => pl.user_id === p.user_id);
                 const numOpponents = opponents.length;
-                const totalWidth = numOpponents * 110; // 95 width + 15 gap
+                const totalWidth = numOpponents * 130; // 105 width + 25 gap
                 const startOffset = -totalWidth / 2;
-                const itemOffset = playerIndex * 110;
+                const itemOffset = playerIndex * 130;
                 positionStyle = { ...positionStyle, top: 0, left: '50%', transform: [{ translateX: startOffset + itemOffset }] };
               }
 
               const isInitiative = p.seat_number === currentRoom.game_state?.initiativeSeat;
               const isActive = p.seat_number === currentRoom.game_state?.activeSeat;
+              const oppBid = currentRoom.game_state?.bids?.[p.user_id];
+              const oppWon = currentRoom.game_state?.tricksWon?.[p.user_id] ?? 0;
 
               return (
-                <View key={p.user_id} style={[{ backgroundColor: '#0f172a', padding: 8, borderRadius: 8, borderWidth: 2, borderColor: isActive ? '#3b82f6' : (isInitiative ? '#eab308' : '#334155'), alignItems: 'center', minWidth: 95, zIndex: 10 }, positionStyle]}>
-                  <Text style={{ color: '#ffffff', fontWeight: '600', fontSize: 12 }}>
+                <View key={p.user_id} style={[{ backgroundColor: '#0f172a', padding: 10, borderRadius: 8, borderWidth: 2, borderColor: isActive ? '#3b82f6' : (isInitiative ? '#eab308' : '#334155'), alignItems: 'center', minWidth: 105, zIndex: 10 }, positionStyle]}>
+                  <Text style={{ color: '#ffffff', fontWeight: '600', fontSize: 13, marginBottom: 4 }} numberOfLines={1}>
                     {p.seat_number}. {p.nickname || 'Player'}{isInitiative ? ' ⭐' : ''}
                   </Text>
-                  <Text style={{ color: '#60a5fa', fontSize: 12, marginTop: 3 }}>
-                    🂠 {currentRoom.game_state?.hands?.[p.user_id]?.length || 0} Cards
+                  <Text style={{ color: '#38bdf8', fontSize: 13, fontWeight: '700' }}>
+                    Bid: {oppBid !== undefined ? oppBid : '—'} | Won: {oppWon}
                   </Text>
                 </View>
               );
@@ -1208,45 +1243,75 @@ export default function App() {
                   </View>
                 )}
               </View>
-            ) : currentRoom.game_state?.phase === 'trick' ? (
-              <View style={{ width: '100%', alignItems: 'center' }}>
-                <Text style={styles.centerArenaTitle}>
-                  {currentRoom.game_state.activeSeat === (currentRoom.game_state.players?.find(p => p.user_id === userId)?.seat_number)
-                    ? "👉 It's Your Turn to Play!"
-                    : `Waiting for ${getPlayerName(currentRoom.game_state.activeSeat)} to Play...`}
-                </Text>
+            ) : (currentRoom.game_state?.phase === 'trick' || trickHold) ? (
+              (() => {
+                const mySeat = currentRoom.game_state.players?.find(p => p.user_id === userId)?.seat_number;
+                const isMyTurn = String(currentRoom.game_state.activeSeat) === String(mySeat);
+                const activeTrick = currentRoom.game_state.trick || [];
+                const lastTrick = currentRoom.game_state.lastTrickResult;
+                const isShowingLastTrick = activeTrick.length === 0 && lastTrick?.cards?.length > 0 && trickHold;
+                const displayCards = isShowingLastTrick ? lastTrick.cards : activeTrick;
 
-                {/* Center Trick Arena Pool */}
-                <View style={{ flexDirection: 'row', justifyContent: 'center', gap: 12, marginTop: 15, minHeight: 80, alignItems: 'center' }}>
-                  {(!currentRoom.game_state.trick || currentRoom.game_state.trick.length === 0) ? (
-                    <Text style={{ color: '#64748b', fontStyle: 'italic' }}>
-                      {currentRoom.game_state.lastTrickResult 
-                        ? `Last trick won by Seat ${currentRoom.game_state.lastTrickResult.winnerSeat}. Lead the next trick!` 
-                        : 'No cards played in this trick yet...'}
-                    </Text>
-                  ) : (
-                    currentRoom.game_state.trick.map((play, idx) => {
-                      const isRed = play.card.suit === 'Hearts' || play.card.suit === 'Diamonds';
-                      const seatNum = currentRoom.game_state.players?.find(p => p.user_id === play.user_id)?.seat_number;
-                      return (
-                        <View key={idx} style={{ alignItems: 'center' }}>
-                          <View style={[styles.cardPlaceholder, { width: 52, height: 74, backgroundColor: '#ffffff', justifyContent: 'center', alignItems: 'center', borderRadius: 6 }]}>
-                            <Text style={{ color: isRed ? '#ef4444' : '#111827', fontWeight: 'bold', fontSize: 16, position: 'absolute', top: 4, left: 6 }}>
-                              {play.card.rank}
-                            </Text>
-                            <Text style={{ fontSize: 20 }}>
-                              {play.card.suit === 'Spades' ? '♠️' : play.card.suit === 'Hearts' ? '♥️' : play.card.suit === 'Diamonds' ? '♦️' : '♣️'}
-                            </Text>
-                          </View>
-                          <Text style={{ color: '#9ca3af', fontSize: 11, marginTop: 4, fontWeight: '600' }}>
-                            Seat {seatNum}
+                const isFinalTrick = currentRoom.game_state?.phase === 'scoring' || currentRoom.game_state?.phase === 'game_over';
+                let statusTitle = `Waiting for ${getPlayerName(currentRoom.game_state.activeSeat)} to Play...`;
+                if (trickHold) {
+                  statusTitle = isFinalTrick 
+                    ? `🏆 Final Trick Won by ${getPlayerName(lastTrick?.winnerId)}!` 
+                    : `🏆 Trick Won by ${getPlayerName(lastTrick?.winnerId)}`;
+                } else if (isMyTurn) {
+                  statusTitle = activeTrick.length === 0 
+                    ? "👉 It's Your Turn to Lead the Trick!" 
+                    : "👉 It's Your Turn to Play!";
+                } else {
+                  statusTitle = activeTrick.length === 0
+                    ? `Waiting for ${getPlayerName(currentRoom.game_state.activeSeat)} to Lead...`
+                    : `Waiting for ${getPlayerName(currentRoom.game_state.activeSeat)} to Play...`;
+                }
+
+                return (
+                  <View style={{ width: '100%', alignItems: 'center' }}>
+                    <Text style={styles.centerArenaTitle}>{statusTitle}</Text>
+
+                    {isShowingLastTrick && (
+                      <View style={{ backgroundColor: '#064e3b', paddingHorizontal: 12, paddingVertical: 4, borderRadius: 20, borderWidth: 1, borderColor: '#10b981', marginTop: 6 }}>
+                        <Text style={{ color: '#34d399', fontSize: 12, fontWeight: '700' }}>
+                          🏆 Trick Won by {getPlayerName(lastTrick.winnerId)}
+                        </Text>
+                      </View>
+                    )}
+
+                    {/* Trick Cards on Table */}
+                    <View style={{ flexDirection: 'row', justifyContent: 'center', gap: 12, marginTop: 12, minHeight: 84, alignItems: 'center' }}>
+                      {displayCards.length === 0 ? (
+                        <View style={{ alignItems: 'center', paddingVertical: 12 }}>
+                          <Text style={{ color: '#94a3b8', fontStyle: 'italic', fontSize: 13 }}>
+                            Table cleared. Waiting for {getPlayerName(currentRoom.game_state.activeSeat)} to lead...
                           </Text>
                         </View>
-                      );
-                    })
-                  )}
-                </View>
-              </View>
+                      ) : (
+                        displayCards.map((play, idx) => {
+                          const isRed = play.card.suit === 'Hearts' || play.card.suit === 'Diamonds';
+                          return (
+                            <View key={idx} style={{ alignItems: 'center' }}>
+                              <View style={[styles.cardPlaceholder, { width: 52, height: 74, backgroundColor: '#ffffff', justifyContent: 'center', alignItems: 'center', borderRadius: 6 }]}>
+                                <Text style={{ color: isRed ? '#ef4444' : '#111827', fontWeight: 'bold', fontSize: 16, position: 'absolute', top: 4, left: 6 }}>
+                                  {play.card.rank}
+                                </Text>
+                                <Text style={{ fontSize: 20 }}>
+                                  {play.card.suit === 'Spades' ? '♠️' : play.card.suit === 'Hearts' ? '♥️' : play.card.suit === 'Diamonds' ? '♦️' : '♣️'}
+                                </Text>
+                              </View>
+                              <Text style={{ color: '#ffffff', fontSize: 11, marginTop: 5, fontWeight: '700', maxWidth: 70 }} numberOfLines={1}>
+                                {getPlayerName(play.user_id)}
+                              </Text>
+                            </View>
+                          );
+                        })
+                      )}
+                    </View>
+                  </View>
+                );
+              })()
             ) : currentRoom.game_state?.phase === 'scoring' ? (
               <View style={{ width: '100%', alignItems: 'center', paddingVertical: 6 }}>
                 <Text style={styles.centerArenaTitle}>🏆 Round {currentRoom.game_state.roundNumber} Complete</Text>
@@ -1446,57 +1511,124 @@ export default function App() {
               const myBid = currentRoom.game_state?.bids?.[userId];
               const myWon = currentRoom.game_state?.tricksWon?.[userId] ?? 0;
               return (
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                    <Text style={{ color: '#ffffff', fontWeight: '700', fontSize: 15 }}>
-                      Your Hand ({nickname || 'You'}{isLead ? ' ⭐ Lead' : ''})
-                    </Text>
-                    <View style={{ backgroundColor: '#0f172a', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, borderWidth: 1, borderColor: '#334155' }}>
-                      <Text style={{ color: '#38bdf8', fontSize: 12, fontWeight: '700' }}>
-                        Bid: {myBid !== undefined ? myBid : '—'} | Won: {myWon}
-                      </Text>
-                    </View>
-                  </View>
-                  <Text style={{ color: '#9ca3af', fontSize: 12 }}>
-                    {currentRoom.game_state?.hands?.[userId]?.length || 0} Cards
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                  <Text style={{ color: '#ffffff', fontWeight: '700', fontSize: 16 }}>
+                    Your Hand{isLead ? ' ⭐ Lead' : ''}
                   </Text>
+                  <View style={{ backgroundColor: '#0f172a', paddingHorizontal: 12, paddingVertical: 4, borderRadius: 6, borderWidth: 1, borderColor: '#38bdf8' }}>
+                    <Text style={{ color: '#38bdf8', fontSize: 14, fontWeight: '800' }}>
+                      Bid: {myBid !== undefined ? myBid : '—'} | Won: {myWon}
+                    </Text>
+                  </View>
                 </View>
               );
             })()}
             
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingVertical: 10, paddingHorizontal: 5 }}>
-              {currentRoom.game_state?.hands?.[userId]?.map((card, idx) => {
-                const isRed = card.suit === 'Hearts' || card.suit === 'Diamonds';
-                const isMyTurn = currentRoom.game_state.phase === 'trick' && 
-                  currentRoom.game_state.activeSeat === (currentRoom.game_state.players?.find(p => p.user_id === userId)?.seat_number);
+            <View style={{ overflow: 'visible', marginTop: 8 }}>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ flexDirection: 'row', justifyContent: 'center', alignItems: 'flex-end', paddingTop: 32, paddingBottom: 12, paddingHorizontal: 12, minHeight: 130, overflow: 'visible' }}>
+              {(() => {
+                const myHand = sortHand(currentRoom.game_state?.hands?.[userId] || []);
+                const mySeat = currentRoom.game_state?.players?.find(p => p.user_id === userId)?.seat_number;
+                const isMyTurn = currentRoom.game_state?.phase === 'trick' && 
+                                 String(currentRoom.game_state?.activeSeat) === String(mySeat) && 
+                                 !trickHold;
+                const activeTrick = currentRoom.game_state?.trick || [];
+                const leadCard = activeTrick.length > 0 ? activeTrick[0].card : null;
 
-                return (
-                  <TouchableOpacity
-                    key={idx}
-                    disabled={!isMyTurn}
-                    onPress={() => handlePlayCard(idx, card)}
-                    style={[
-                      styles.cardPlaceholder,
-                      { 
-                        backgroundColor: '#ffffff', 
-                        marginLeft: idx === 0 ? 0 : -30,
-                        transform: [{ translateY: isMyTurn ? -6 : 0 }],
-                        borderColor: isMyTurn ? '#3b82f6' : '#d1d5db',
-                        borderWidth: isMyTurn ? 2 : 1,
-                        opacity: isMyTurn ? 1 : 0.85
-                      }
-                    ]}
-                  >
-                    <Text style={{ color: isRed ? '#ef4444' : '#111827', fontWeight: 'bold', fontSize: 18, position: 'absolute', top: 6, left: 6 }}>
-                      {card.rank}
-                    </Text>
-                    <Text style={{ fontSize: 24 }}>
-                      {card.suit === 'Spades' ? '♠️' : card.suit === 'Hearts' ? '♥️' : card.suit === 'Diamonds' ? '♦️' : '♣️'}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
+                return myHand.map((card, idx) => {
+                  const isSelected = selectedCardIdx === idx;
+                  const isLegal = isMyTurn ? isValidPlay(myHand, card, leadCard) : false;
+                  const canInteract = isMyTurn && isLegal;
+                  const isRed = card.suit === 'Hearts' || card.suit === 'Diamonds';
+                  const cardColor = isRed ? '#dc2626' : '#0f172a';
+                  const symbol = card.suit === 'Spades' ? '♠' : card.suit === 'Hearts' ? '♥' : card.suit === 'Diamonds' ? '♦' : '♣';
+
+                  const cardUniqueId = `${card.suit}-${card.rank}`;
+                  const onCardPress = () => {
+                    if (!canInteract || animatingCardId !== null) return;
+                    if (isSelected) {
+                      // Step 2: Launch card toward center table without dropping back down
+                      const cardId = `${card.suit}-${card.rank}`;
+                      // Add card to hidden set first to ensure it stays hidden
+                      setHiddenCards(prev => new Set([...prev, cardId]));
+                      setAnimatingCardId(cardId);
+                      flyAnimY.setValue(-18);
+                      flyAnimScale.setValue(1);
+                      flyAnimOpacity.setValue(1);
+
+                      Animated.parallel([
+                        Animated.timing(flyAnimY, {
+                          toValue: -80, // Snappy upward flick
+                          duration: 150,
+                          easing: Easing.out(Easing.ease),
+                          useNativeDriver: true,
+                        }),
+                        Animated.timing(flyAnimScale, {
+                          toValue: 0.7, // Shrinks as it moves away
+                          duration: 150,
+                          useNativeDriver: true,
+                        }),
+                        Animated.timing(flyAnimOpacity, {
+                          toValue: 0, // Fades out completely as it leaves the hand
+                          duration: 150,
+                          useNativeDriver: true,
+                        }),
+                      ]).start(() => {
+                        const rawIndex = currentRoom.game_state.hands[userId].findIndex(
+                          c => c.suit === card.suit && c.rank === card.rank
+                        );
+                        handlePlayCard(rawIndex !== -1 ? rawIndex : idx, card);
+                        setSelectedCardIdx(null);
+                        // Reset animating state after animation completes - card remains in hiddenCards until removed
+                        setAnimatingCardId(null);
+                      });
+                    } else {
+                      // Step 1: Elevate selected card
+                      setSelectedCardIdx(idx);
+                    }
+                  };
+
+                  const isCardAnimating = animatingCardId === cardUniqueId;
+                  const isCardHidden = hiddenCards.has(cardUniqueId);
+                  // If card is hidden, keep it at opacity 0 until it's removed from the hand
+                  const finalOpacity = isCardHidden ? 0 : (isCardAnimating ? flyAnimOpacity : (isMyTurn ? (isLegal ? 1 : 0.35) : 0.8));
+                  const translateYValue = isCardAnimating ? flyAnimY : (isSelected ? -18 : 0);
+                  const scaleValue = isCardAnimating ? flyAnimScale : 1;
+
+                  return (
+                    <AnimatedTouchable
+                      key={`${card.suit}-${card.rank}-${idx}`}
+                      activeOpacity={0.85}
+                      disabled={!canInteract || animatingCardId !== null}
+                      onPress={onCardPress}
+                      style={[
+                        styles.cardPlaceholder,
+                        { 
+                          marginLeft: idx === 0 ? 0 : -30,
+                          zIndex: isCardAnimating ? 999 : (isSelected ? 99 : idx),
+                          backgroundColor: isMyTurn && !isLegal ? '#cbd5e1' : '#ffffff',
+                          opacity: finalOpacity,
+                          borderColor: isSelected ? '#38bdf8' : (isLegal && isMyTurn ? '#93c5fd' : '#cbd5e1'),
+                          borderWidth: isSelected ? 2 : 1,
+                          transform: [
+                            { translateY: translateYValue },
+                            { scale: scaleValue }
+                          ]
+                        }
+                      ]}
+                    >
+                      <Text style={{ color: cardColor, fontWeight: 'bold', fontSize: 18, position: 'absolute', top: 6, left: 6 }}>
+                        {card.rank}
+                      </Text>
+                      <Text style={{ fontSize: 24 }}>
+                        {card.suit === 'Spades' ? '♠️' : card.suit === 'Hearts' ? '♥️' : card.suit === 'Diamonds' ? '♦️' : '♣️'}
+                      </Text>
+                    </AnimatedTouchable>
+                  );
+                });
+              })()}
             </ScrollView>
+            </View>
           </View>
 
           <View style={currentRoom.status === 'playing' ? { alignItems: 'center' } : {}}>
