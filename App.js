@@ -10,11 +10,10 @@ import {
   Alert,
   Animated,
   Easing,
-  Modal
+  Modal,
+  useWindowDimensions
 } from 'react-native';
 
-// Create animated component ONCE outside the App component
-const AnimatedTouchable = Animated.createAnimatedComponent(TouchableOpacity);
 import { supabase } from './supabaseClient';
 import { 
   getMaxCardsPerPlayer, 
@@ -29,6 +28,9 @@ import {
   isValidPlay,
   resolveTrickWinner
 } from './src/core/gameEngine';
+import { soundManager } from './src/utils/soundManager';
+
+const AnimatedTouchable = Animated.createAnimatedComponent(TouchableOpacity);
 
 // Session persistence helpers
 const saveSession = (key, val) => {
@@ -50,7 +52,16 @@ const getSession = (key) => {
     return null;
   };
 
+const getSuitColor = (suit) => {
+  return (suit === 'Hearts' || suit === 'Diamonds') ? 'red' : 'black';
+};
+
 export default function App() {
+  // Screen dimensions
+  const { width: windowWidth } = useWindowDimensions();
+  const [selectedBid, setSelectedBid] = useState(0);
+  const bidWheelRef = useRef(null);
+
   // Session & User State
   const [userId, setUserId] = useState(null);
   const [nickname, setNickname] = useState('');
@@ -83,16 +94,44 @@ export default function App() {
   // Scorecard Modal State
   const [showScoreModal, setShowScoreModal] = useState(false);
   
+  // Sound state
+  const [isSoundMuted, setIsSoundMuted] = useState(false);
+
+  // Card animation state
+  const [animatingCardIdx, setAnimatingCardIdx] = useState(null);
+  const flyAnimY = useRef(new Animated.Value(0)).current;
+  const flyAnimScale = useRef(new Animated.Value(1)).current;
+  
   // Card selection and trick hold state
   const [selectedCardIdx, setSelectedCardIdx] = useState(null);
   const [trickHold, setTrickHold] = useState(false);
-  
-  // Card throw animation state and refs
-  const [animatingCardId, setAnimatingCardId] = useState(null);
-  const [hiddenCards, setHiddenCards] = useState(new Set());
-  const flyAnimY = useRef(new Animated.Value(0)).current;
-  const flyAnimScale = useRef(new Animated.Value(1)).current;
-  const flyAnimOpacity = useRef(new Animated.Value(1)).current;
+
+  // Reset card animation state on round/hand change
+  useEffect(() => {
+    setSelectedCardIdx(null);
+    // Fix for animation state not resetting when hand updates after playing a card
+    if (animatingCardIdx !== null) {
+      flyAnimY.setValue(0);
+      flyAnimScale.setValue(1);
+      setAnimatingCardIdx(null);
+    }
+  }, [currentRoom?.game_state?.roundNumber, currentRoom?.game_state?.hands?.[userId]?.length]);
+
+  // Initialize bid wheel to legal starting bid when bidding phase begins
+  useEffect(() => {
+    if (currentRoom?.game_state?.phase === 'bidding') {
+      const committedBids = Object.values(currentRoom.game_state.bids || {});
+      const totalPlayers = currentRoom.game_state.players?.length || 4;
+      const cardsDealt = currentRoom.game_state.cardsDealt || 1;
+      const isFinal = isFinalBidder(totalPlayers, committedBids.length);
+      const forbiddenBid = isFinal ? calculateForbiddenBid(cardsDealt, committedBids) : -1;
+      const initialBid = forbiddenBid === 0 ? 1 : 0;
+      setSelectedBid(initialBid);
+      setTimeout(() => {
+        bidWheelRef.current?.scrollTo({ y: initialBid * 36, animated: false });
+      }, 50);
+    }
+  }, [currentRoom?.game_state?.roundNumber, currentRoom?.game_state?.phase, currentRoom?.game_state?.activeSeat]);
 
   // Helper to get player name by seat or ID
   const getPlayerName = (identifier) => {
@@ -311,6 +350,23 @@ export default function App() {
   useEffect(() => {
     setSelectedCardIdx(null);
   }, [currentRoom?.game_state?.activeSeat, currentRoom?.game_state?.phase]);
+
+  // Sync mute state with soundManager
+  useEffect(() => {
+    soundManager.setMuted(isSoundMuted);
+  }, [isSoundMuted]);
+
+  // Play "your turn" sound when it becomes the player's turn
+  const prevActiveSeat = useRef(null);
+  useEffect(() => {
+    if (!currentRoom?.game_state || !userId) return;
+    const gs = currentRoom.game_state;
+    const mySeat = (gs.players || players).find(p => p.user_id === userId)?.seat_number;
+    if (gs.activeSeat === mySeat && prevActiveSeat.current !== mySeat && (gs.phase === 'bidding' || gs.phase === 'trick')) {
+      soundManager.playYourTurn();
+    }
+    prevActiveSeat.current = gs.activeSeat;
+  }, [currentRoom?.game_state?.activeSeat, currentRoom?.game_state?.phase, userId, players]);
 
   // 4. Host Authentication Handler ("funfam123999")
   const handleHostAuth = async () => {
@@ -557,6 +613,8 @@ export default function App() {
     const mySeat = (gs.players || players).find(p => p.user_id === userId)?.seat_number;
     if (gs.phase !== 'bidding' || gs.activeSeat !== mySeat) return;
 
+    soundManager.playBidPlace();
+
     setLoading(true);
     setErrorLog('');
     try {
@@ -601,15 +659,22 @@ export default function App() {
 
   // 11. Play Card & Resolve Trick / Scoring
   const handlePlayCard = async (cardIndex, playedCard) => {
-    if (!currentRoom?.game_state) return;
+    if (!currentRoom?.game_state || loading) return;
     const gs = currentRoom.game_state;
     const mySeat = (gs.players || players).find(p => p.user_id === userId)?.seat_number;
-    if (gs.phase !== 'trick' || gs.activeSeat !== mySeat) return;
+    if (gs.phase !== 'trick' || String(gs.activeSeat) !== String(mySeat)) return;
 
     setLoading(true);
     setErrorLog('');
     try {
-      const myHand = gs.hands[userId];
+      const myHand = gs.hands?.[userId] || [];
+      const actualIndex = myHand.findIndex(
+        c => c.suit === playedCard.suit && c.rank === playedCard.rank
+      );
+      if (actualIndex === -1) {
+        throw new Error('Card not found in hand. State may be out of sync.');
+      }
+
       const currentTrick = gs.trick || [];
       const leadCard = currentTrick.length > 0 ? currentTrick[0].card : null;
 
@@ -617,7 +682,7 @@ export default function App() {
         throw new Error(`Invalid Play: You must follow the lead suit (${leadCard.suit})!`);
       }
 
-      const updatedHand = myHand.filter((_, idx) => idx !== cardIndex);
+      const updatedHand = myHand.filter((_, idx) => idx !== actualIndex);
       const updatedHands = { ...gs.hands, [userId]: updatedHand };
       const updatedTrick = [...currentTrick, { user_id: userId, card: playedCard }];
       
@@ -629,6 +694,11 @@ export default function App() {
       let cumulativeScores = { ...(gs.cumulativeScores || {}) };
       let updatedScoreHistory = gs.scoreHistory || [];
 
+      // If a new trick is starting, clear the lastTrickResult from the state
+      if (currentTrick.length === 0) {
+        lastTrickResult = null;
+      }
+
       if (updatedTrick.length === gs.players.length) {
         const winnerId = resolveTrickWinner(updatedTrick, gs.isNoTrump ? null : gs.trumpCard);
         const winnerSeat = gs.players.find(p => p.user_id === winnerId)?.seat_number;
@@ -636,6 +706,8 @@ export default function App() {
         updatedTricksWon[winnerId] = (updatedTricksWon[winnerId] || 0) + 1;
         nextActiveSeat = winnerSeat;
         lastTrickResult = { winnerId, winnerSeat, cards: updatedTrick };
+
+        soundManager.playTrickWin();
 
         const isRoundOver = gs.players.every(p => !updatedHands[p.user_id] || updatedHands[p.user_id].length === 0);
         if (isRoundOver) {
@@ -648,6 +720,8 @@ export default function App() {
             roundScores[p.user_id] = pts;
             cumulativeScores[p.user_id] = (cumulativeScores[p.user_id] || 0) + pts;
           });
+
+          soundManager.playRoundComplete();
 
           const roundRecord = {
             roundNumber: gs.roundNumber,
@@ -682,6 +756,10 @@ export default function App() {
       if (updateErr) throw updateErr;
     } catch (err) {
       setErrorLog(err.message);
+      // Failsafe to reset animation on error
+      flyAnimY.setValue(0);
+      flyAnimScale.setValue(1);
+      setAnimatingCardIdx(null);
     } finally {
       setLoading(false);
     }
@@ -1066,7 +1144,7 @@ export default function App() {
                   {currentRoom.game_state.scoreHistory.map(record => (
                     <View key={record.roundNumber} style={{ flexDirection: 'row', paddingVertical: 5, borderBottomWidth: 1, borderColor: '#1e293b', alignItems: 'center' }}>
                       <Text style={{ flex: 1.1, color: '#f3f4f6', fontSize: 11, fontWeight: '600' }}>
-                        R{record.roundNumber}
+                        {record.roundNumber}
                       </Text>
                       {[...(currentRoom.game_state?.players || [])]
                         .sort((a, b) => a.seat_number - b.seat_number)
@@ -1108,83 +1186,108 @@ export default function App() {
       {currentRoom && currentRoom.status === 'playing' && (
         <View style={styles.cardWide}>
           
-          {/* Header & Trump Card & Scorecard Trigger */}
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-            <View>
-              <Text style={{ fontSize: 22, fontWeight: '800', color: '#ffffff' }}>Desk #{currentRoom.id}</Text>
-              <Text style={{ color: '#9ca3af', fontSize: 12 }}>
-                Round {currentRoom.game_state?.roundNumber || 1} of {currentRoom.game_state?.totalRounds || 1} • {currentRoom.game_state?.cardsDealt || 1} Cards • {currentRoom.game_state?.mode?.toUpperCase()}
+          {/* 1. Header: Multi-line Desk Info, Controls & Inset Trump Card */}
+          <View style={styles.boardHeader}>
+            <View style={{ flex: 1, paddingRight: 8 }}>
+              <Text style={styles.boardTitle}>Desk #{currentRoom.id}</Text>
+              <Text style={styles.boardSubTitle}>
+                Round {currentRoom.game_state?.roundNumber || 1} of {currentRoom.game_state?.totalRounds || 25}
+              </Text>
+              <Text style={{ fontSize: 12, color: '#cbd5e1', fontWeight: '600', marginTop: 2 }}>
+                {currentRoom.game_state?.cardsDealt || 0} Cards
+              </Text>
+              <Text style={{ fontSize: 11, color: '#38bdf8', fontWeight: '800', letterSpacing: 0.6, marginTop: 2 }}>
+                {(currentRoom.game_state?.mode || currentRoom.round_mode || 'mountain').toUpperCase()}
               </Text>
             </View>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-              <TouchableOpacity 
-                style={{ backgroundColor: '#1e293b', paddingVertical: 8, paddingHorizontal: 12, borderRadius: 8, borderWidth: 1, borderColor: '#475569' }}
+
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginRight: 10 }}>
+              <TouchableOpacity
                 onPress={() => setShowScoreModal(true)}
+                style={{ backgroundColor: '#0f172a', paddingVertical: 7, paddingHorizontal: 10, borderRadius: 8, borderWidth: 1, borderColor: '#334155', flexDirection: 'row', alignItems: 'center', gap: 4 }}
               >
-                <Text style={{ color: '#38bdf8', fontSize: 13, fontWeight: '700' }}>📊 Scorecard</Text>
+                <Text style={{ fontSize: 12 }}>📊</Text>
+                <Text style={{ color: '#e2e8f0', fontSize: 12, fontWeight: '700' }}>Scorecard</Text>
               </TouchableOpacity>
-              <View style={{ alignItems: 'center' }}>
-                <Text style={{ color: '#10b981', fontWeight: '700', fontSize: 11, marginBottom: 4 }}>TRUMP</Text>
-                {currentRoom.game_state?.isNoTrump ? (
-                  <View style={{ backgroundColor: '#0f172a', paddingVertical: 16, paddingHorizontal: 12, borderRadius: 6, borderWidth: 1, borderColor: '#334155', alignItems: 'center', justifyContent: 'center', minWidth: 60 }}>
-                    <Text style={{ color: '#9ca3af', fontWeight: '600', fontSize: 12 }}>NO</Text>
-                    <Text style={{ color: '#9ca3af', fontWeight: '600', fontSize: 12 }}>TRUMP</Text>
-                  </View>
-                ) : (
-                  <View style={{ backgroundColor: '#ffffff', width: 60, height: 85, borderRadius: 6, borderWidth: 1, borderColor: '#d1d5db', alignItems: 'center', justifyContent: 'center', elevation: 3, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.2, shadowRadius: 2 }}>
-                    <Text style={{ color: (currentRoom.game_state?.trumpCard?.suit === 'Hearts' || currentRoom.game_state?.trumpCard?.suit === 'Diamonds') ? '#ef4444' : '#111827', fontWeight: 'bold', fontSize: 18, position: 'absolute', top: 6, left: 6 }}>
-                      {currentRoom.game_state?.trumpCard?.rank}
-                    </Text>
-                    <Text style={{ fontSize: 24 }}>
-                      {currentRoom.game_state?.trumpCard?.suit === 'Spades' ? '♠️' : currentRoom.game_state?.trumpCard?.suit === 'Hearts' ? '♥️' : currentRoom.game_state?.trumpCard?.suit === 'Diamonds' ? '♦️' : '♣️'}
-                    </Text>
-                  </View>
-                )}
-              </View>
+
+              <TouchableOpacity
+                onPress={() => {
+                  if (typeof soundManager !== 'undefined' && soundManager.toggleMute) {
+                    const muted = soundManager.toggleMute();
+                    setIsSoundMuted(muted);
+                  }
+                }}
+                style={{ backgroundColor: '#0f172a', width: 34, height: 34, borderRadius: 8, borderWidth: 1, borderColor: '#334155', justifyContent: 'center', alignItems: 'center' }}
+              >
+                <Text style={{ fontSize: 14 }}>{isSoundMuted ? '🔇' : '🔊'}</Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Trump Card Display with clean right & top margin inside frame */}
+            <View style={{ alignItems: 'center', marginRight: 6 }}>
+              <Text style={{ fontSize: 10, fontWeight: '800', color: '#10b981', letterSpacing: 0.5, marginBottom: 3 }}>
+                TRUMP
+              </Text>
+              {currentRoom.game_state?.isNoTrump ? (
+                <View style={{ width: 44, height: 62, borderRadius: 6, backgroundColor: '#78350f', borderWidth: 1, borderColor: '#f59e0b', justifyContent: 'center', alignItems: 'center' }}>
+                  <Text style={{ color: '#fbbf24', fontWeight: '800', fontSize: 11 }}>NT</Text>
+                </View>
+              ) : currentRoom.game_state?.trumpCard ? (
+                <View style={{ width: 44, height: 62, borderRadius: 6, backgroundColor: '#ffffff', borderWidth: 1, borderColor: '#cbd5e1', padding: 4, justifyContent: 'space-between' }}>
+                  <Text style={{ color: (currentRoom.game_state.trumpCard.suit === 'Hearts' || currentRoom.game_state.trumpCard.suit === 'Diamonds') ? '#dc2626' : '#0f172a', fontWeight: '800', fontSize: 12, lineHeight: 13 }}>
+                    {currentRoom.game_state.trumpCard.rank}
+                  </Text>
+                  <Text style={{ color: (currentRoom.game_state.trumpCard.suit === 'Hearts' || currentRoom.game_state.trumpCard.suit === 'Diamonds') ? '#dc2626' : '#0f172a', fontSize: 20, textAlign: 'center', lineHeight: 22 }}>
+                    {currentRoom.game_state.trumpCard.suit === 'Spades' ? '♠' : currentRoom.game_state.trumpCard.suit === 'Hearts' ? '♥' : currentRoom.game_state.trumpCard.suit === 'Diamonds' ? '♦' : '♣'}
+                  </Text>
+                </View>
+              ) : (
+                <View style={{ width: 44, height: 62, borderRadius: 6, backgroundColor: '#0f172a', borderWidth: 1, borderColor: '#334155', justifyContent: 'center', alignItems: 'center' }}>
+                  <Text style={{ color: '#64748b', fontSize: 11 }}>—</Text>
+                </View>
+              )}
             </View>
           </View>
 
-          {/* Opponents HUD (Shows ⭐ Lead on Initiative Seat, Not Host) */}
-          <View style={{ minHeight: 80, width: '100%', justifyContent: 'center', alignItems: 'center', marginBottom: 16, position: 'relative' }}>
-            {currentRoom.game_state?.players?.filter(p => p.user_id !== userId).map(p => {
-              const mySeat = currentRoom.game_state.players.find(pl => pl.user_id === userId)?.seat_number;
-              const totalPlayers = currentRoom.game_state.players.length;
-              const seatDiff = (p.seat_number - mySeat + totalPlayers) % totalPlayers;
+          {/* 2. Opponents HUD Grid (Wraps cleanly for 3–8 players) */}
+          {(() => {
+            const allPlayers = [...(currentRoom.game_state?.players || [])].sort(
+              (a, b) => a.seat_number - b.seat_number
+            );
+            const myIdx = allPlayers.findIndex(p => p.user_id === userId);
+            const orderedOpponents =
+              myIdx !== -1
+                ? [...allPlayers.slice(myIdx + 1), ...allPlayers.slice(0, myIdx)]
+                : allPlayers.filter(p => p.user_id !== userId);
 
-              let positionStyle = { position: 'absolute' };
-              // "Table" positioning logic for 4 players (1 top, 1 left, 1 right)
-              if (totalPlayers === 4) {
-                if (seatDiff === 1) positionStyle = { ...positionStyle, left: '5%', top: '50%', transform: [{ translateY: '-50%' }] }; // Left
-                if (seatDiff === 2) positionStyle = { ...positionStyle, top: 0, left: '50%', transform: [{ translateX: '-50%' }] }; // Top
-                if (seatDiff === 3) positionStyle = { ...positionStyle, right: '5%', top: '50%', transform: [{ translateY: '-50%' }] }; // Right
-              } else {
-                // Fallback to a row at the top for other player counts
-                const opponents = currentRoom.game_state.players.filter(pl => pl.user_id !== userId);
-                const playerIndex = opponents.findIndex(pl => pl.user_id === p.user_id);
-                const numOpponents = opponents.length;
-                const totalWidth = numOpponents * 130; // 105 width + 25 gap
-                const startOffset = -totalWidth / 2;
-                const itemOffset = playerIndex * 130;
-                positionStyle = { ...positionStyle, top: 0, left: '50%', transform: [{ translateX: startOffset + itemOffset }] };
-              }
+            return (
+              <View style={styles.opponentsGrid}>
+                {orderedOpponents.map((opp) => {
+                  const oppBid = currentRoom.game_state?.bids?.[opp.user_id];
+                  const oppWon = currentRoom.game_state?.tricksWon?.[opp.user_id] ?? 0;
+                  const isOppTurn = String(currentRoom.game_state?.activeSeat) === String(opp.seat_number);
+                  const isOppLead = String(currentRoom.game_state?.initiativeSeat) === String(opp.seat_number);
 
-              const isInitiative = p.seat_number === currentRoom.game_state?.initiativeSeat;
-              const isActive = p.seat_number === currentRoom.game_state?.activeSeat;
-              const oppBid = currentRoom.game_state?.bids?.[p.user_id];
-              const oppWon = currentRoom.game_state?.tricksWon?.[p.user_id] ?? 0;
-
-              return (
-                <View key={p.user_id} style={[{ backgroundColor: '#0f172a', padding: 10, borderRadius: 8, borderWidth: 2, borderColor: isActive ? '#3b82f6' : (isInitiative ? '#eab308' : '#334155'), alignItems: 'center', minWidth: 105, zIndex: 10 }, positionStyle]}>
-                  <Text style={{ color: '#ffffff', fontWeight: '600', fontSize: 13, marginBottom: 4 }} numberOfLines={1}>
-                    {p.seat_number}. {p.nickname || 'Player'}{isInitiative ? ' ⭐' : ''}
-                  </Text>
-                  <Text style={{ color: '#38bdf8', fontSize: 13, fontWeight: '700' }}>
-                    Bid: {oppBid !== undefined ? oppBid : '—'} | Won: {oppWon}
-                  </Text>
-                </View>
-              );
-            })}
-          </View>
+                  return (
+                    <View
+                      key={opp.user_id}
+                      style={[
+                        styles.opponentCard,
+                        isOppTurn && { borderColor: '#38bdf8', backgroundColor: '#132238' },
+                      ]}
+                    >
+                      <Text numberOfLines={1} style={styles.oppNameText}>
+                        {opp.seat_number}. {opp.nickname || 'Player'}{isOppLead ? ' ⭐' : ''}
+                      </Text>
+                      <Text style={styles.oppContractText}>
+                        Bid: {oppBid !== undefined ? oppBid : '—'} | Won: {oppWon}
+                      </Text>
+                    </View>
+                  );
+                })}
+              </View>
+            );
+          })()}
 
           {/* Center Arena */}
           <View style={styles.centerArena}>
@@ -1197,12 +1300,12 @@ export default function App() {
                 </Text>
 
                 {/* Display Current Bids */}
-                <View style={{ flexDirection: 'row', justifyContent: 'center', gap: 10, marginVertical: 12, flexWrap: 'wrap' }}>
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 6, marginVertical: 8 }}>
                   {currentRoom.game_state.players?.map((p) => {
                     const playerBid = currentRoom.game_state.bids?.[p.user_id];
                     const hasBid = playerBid !== undefined;
                     return (
-                      <View key={p.user_id} style={{ alignItems: 'center', minWidth: 50, padding: 6, backgroundColor: '#1e293b', borderRadius: 6, borderWidth: 1, borderColor: '#334155' }}>
+                      <View key={p.user_id} style={{ alignItems: 'center', minWidth: 52, paddingVertical: 5, paddingHorizontal: 8, backgroundColor: '#1e293b', borderRadius: 6, borderWidth: 1, borderColor: '#334155' }}>
                         <Text style={{ color: '#9ca3af', fontSize: 11 }} numberOfLines={1}>{getPlayerName(p.user_id)}</Text>
                         <Text style={{ color: hasBid ? '#10b981' : '#64748b', fontSize: 16, fontWeight: '800', marginTop: 2 }}>
                           {hasBid ? playerBid : '?'}
@@ -1212,36 +1315,112 @@ export default function App() {
                   })}
                 </View>
 
-                {/* Bid Selection Chips */}
-                {currentRoom.game_state.activeSeat === (currentRoom.game_state.players?.find(p => p.user_id === userId)?.seat_number) && (
-                  <View style={{ width: '100%', alignItems: 'center', marginTop: 6 }}>
-                    <Text style={styles.centerArenaSubText}>Select your bid for this round:</Text>
-                    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ flexDirection: 'row', gap: 8, paddingVertical: 10, justifyContent: 'center' }}>
-                      {Array.from({ length: (currentRoom.game_state.cardsDealt || 1) + 1 }).map((_, bidValue) => {
-                        const committedBids = Object.values(currentRoom.game_state.bids || {});
-                        const isFinal = isFinalBidder(currentRoom.game_state.players.length, committedBids.length);
-                        const forbiddenBid = isFinal ? calculateForbiddenBid(currentRoom.game_state.cardsDealt, committedBids) : -1;
-                        const isForbidden = isFinal && bidValue === forbiddenBid;
+                {/* Bid Selection - iOS-style Bid Wheel Drum */}
+                {currentRoom.game_state.activeSeat === (currentRoom.game_state.players?.find(p => p.user_id === userId)?.seat_number) && (() => {
+                  const cardsDealt = currentRoom.game_state.cardsDealt || 1;
+                  const committedBids = Object.values(currentRoom.game_state.bids || {});
+                  const isFinal = isFinalBidder(currentRoom.game_state.players.length, committedBids.length);
+                  const forbiddenBid = isFinal ? calculateForbiddenBid(cardsDealt, committedBids) : -1;
+                  const isSelectedForbidden = isFinal && selectedBid === forbiddenBid;
+                  const ITEM_H = 36;
 
-                        return (
-                          <TouchableOpacity
-                            key={bidValue}
-                            disabled={isForbidden}
-                            style={[
-                              styles.chip,
-                              { backgroundColor: isForbidden ? '#4b5563' : '#2563eb', paddingHorizontal: 14, paddingVertical: 8, opacity: isForbidden ? 0.6 : 1 }
-                            ]}
-                            onPress={() => handlePlaceBid(bidValue)}
+                  return (
+                    <View style={{ width: '100%', alignItems: 'center', marginTop: 6 }}>
+                      <Text style={styles.centerArenaSubText}>Roll or tap to select your bid:</Text>
+
+                      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 14, marginTop: 10 }}>
+                        {/* iOS Cylindrical Bid Wheel Drum */}
+                        <View style={{ width: 116, height: ITEM_H * 3, backgroundColor: '#0f172a', borderRadius: 12, borderWidth: 1, borderColor: '#334155', overflow: 'hidden', position: 'relative' }}>
+                          {/* Center Selection Lens */}
+                          <View
+                            pointerEvents="none"
+                            style={{
+                              position: 'absolute',
+                              top: ITEM_H,
+                              left: 6,
+                              right: 6,
+                              height: ITEM_H,
+                              borderRadius: 8,
+                              backgroundColor: isSelectedForbidden ? 'rgba(239, 68, 68, 0.16)' : 'rgba(56, 189, 248, 0.16)',
+                              borderWidth: 1,
+                              borderColor: isSelectedForbidden ? '#ef4444' : '#38bdf8',
+                              zIndex: 2,
+                            }}
+                          />
+                          <ScrollView
+                            ref={bidWheelRef}
+                            nestedScrollEnabled={true}
+                            showsVerticalScrollIndicator={false}
+                            snapToInterval={ITEM_H}
+                            decelerationRate="fast"
+                            contentContainerStyle={{ paddingVertical: ITEM_H }}
+                            onScroll={(e) => {
+                              const offsetY = e.nativeEvent.contentOffset.y;
+                              const idx = Math.max(0, Math.min(cardsDealt, Math.round(offsetY / ITEM_H)));
+                              if (idx !== selectedBid) setSelectedBid(idx);
+                            }}
+                            scrollEventThrottle={16}
                           >
-                            <Text style={styles.chipText}>
-                              {bidValue}{isForbidden ? ' 🚫 (Hook)' : ''}
-                            </Text>
-                          </TouchableOpacity>
-                        );
-                      })}
-                    </ScrollView>
-                  </View>
-                )}
+                            {Array.from({ length: cardsDealt + 1 }).map((_, bidValue) => {
+                              const isForbidden = isFinal && bidValue === forbiddenBid;
+                              const isCenter = bidValue === selectedBid;
+                              return (
+                                <TouchableOpacity
+                                  key={bidValue}
+                                  activeOpacity={0.8}
+                                  onPress={() => {
+                                    setSelectedBid(bidValue);
+                                    bidWheelRef.current?.scrollTo({ y: bidValue * ITEM_H, animated: true });
+                                  }}
+                                  style={{ height: ITEM_H, justifyContent: 'center', alignItems: 'center' }}
+                                >
+                                  <Text
+                                    style={{
+                                      fontSize: isCenter ? 18 : 14,
+                                      fontWeight: isCenter ? '800' : '600',
+                                      color: isForbidden
+                                        ? '#f87171'
+                                        : (isCenter ? '#ffffff' : '#64748b'),
+                                    }}
+                                  >
+                                    {bidValue}{isForbidden ? ' 🚫' : ''}
+                                  </Text>
+                                </TouchableOpacity>
+                              );
+                            })}
+                          </ScrollView>
+                        </View>
+
+                        {/* Confirm Bid Action Button */}
+                        <TouchableOpacity
+                          disabled={isSelectedForbidden}
+                          onPress={() => {
+                            if (typeof soundManager !== 'undefined') soundManager.playBidPlace?.();
+                            handlePlaceBid(selectedBid);
+                          }}
+                          style={{
+                            backgroundColor: isSelectedForbidden ? '#475569' : '#2563eb',
+                            paddingVertical: 14,
+                            paddingHorizontal: 18,
+                            borderRadius: 10,
+                            borderWidth: 1,
+                            borderColor: isSelectedForbidden ? '#64748b' : '#60a5fa',
+                            opacity: isSelectedForbidden ? 0.75 : 1,
+                            minWidth: 145,
+                            alignItems: 'center',
+                          }}
+                        >
+                          <Text style={{ color: '#ffffff', fontWeight: '800', fontSize: 14 }}>
+                            {isSelectedForbidden ? `🚫 Hook (${selectedBid})` : `Confirm Bid: ${selectedBid}`}
+                          </Text>
+                          <Text style={{ color: '#cbd5e1', fontSize: 11, marginTop: 2 }}>
+                            {isSelectedForbidden ? 'Forbidden by Hook' : `of ${cardsDealt} Tricks`}
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  );
+                })()}
               </View>
             ) : (currentRoom.game_state?.phase === 'trick' || trickHold) ? (
               (() => {
@@ -1256,8 +1435,8 @@ export default function App() {
                 let statusTitle = `Waiting for ${getPlayerName(currentRoom.game_state.activeSeat)} to Play...`;
                 if (trickHold) {
                   statusTitle = isFinalTrick 
-                    ? `🏆 Final Trick Won by ${getPlayerName(lastTrick?.winnerId)}!` 
-                    : `🏆 Trick Won by ${getPlayerName(lastTrick?.winnerId)}`;
+                    ? `Final Trick Won by ${getPlayerName(lastTrick?.winnerId)}!` 
+                    : `Trick Won by ${getPlayerName(lastTrick?.winnerId)}`;
                 } else if (isMyTurn) {
                   statusTitle = activeTrick.length === 0 
                     ? "👉 It's Your Turn to Lead the Trick!" 
@@ -1268,20 +1447,55 @@ export default function App() {
                     : `Waiting for ${getPlayerName(currentRoom.game_state.activeSeat)} to Play...`;
                 }
 
+                const totalBids = Object.values(currentRoom.game_state.bids || {}).reduce(
+                  (sum, val) => sum + Number(val || 0),
+                  0
+                );
+                const cardsDealt = currentRoom.game_state.cardsDealt || 1;
+                const bidDiff = totalBids - cardsDealt;
+                const isFight = bidDiff > 0;
+                const diffCount = Math.abs(bidDiff);
+                const tensionLabel = bidDiff === 0
+                  ? '⚖️ 平注 (Even)'
+                  : isFight
+                    ? `⚔️ 搶 ${diffCount} 注 (Fight +${diffCount})`
+                    : `🛡️ 讓 ${diffCount} 注 (Yield -${diffCount})`;
+
                 return (
                   <View style={{ width: '100%', alignItems: 'center' }}>
+                    <View
+                      style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 8,
+                        backgroundColor: isFight ? 'rgba(239, 68, 68, 0.15)' : 'rgba(16, 185, 129, 0.15)',
+                        borderColor: isFight ? '#ef4444' : '#10b981',
+                        borderWidth: 1,
+                        paddingHorizontal: 12,
+                        paddingVertical: 4,
+                        borderRadius: 16,
+                        marginBottom: 8,
+                      }}
+                    >
+                      <Text style={{ color: '#e2e8f0', fontSize: 12, fontWeight: '600' }}>
+                        Total Bids: {totalBids}/{cardsDealt}
+                      </Text>
+                      <Text style={{ color: '#64748b', fontSize: 12 }}>|</Text>
+                      <Text
+                        style={{
+                          color: isFight ? '#fca5a5' : '#6ee7b7',
+                          fontSize: 12,
+                          fontWeight: '800',
+                        }}
+                      >
+                        {tensionLabel}
+                      </Text>
+                    </View>
                     <Text style={styles.centerArenaTitle}>{statusTitle}</Text>
 
-                    {isShowingLastTrick && (
-                      <View style={{ backgroundColor: '#064e3b', paddingHorizontal: 12, paddingVertical: 4, borderRadius: 20, borderWidth: 1, borderColor: '#10b981', marginTop: 6 }}>
-                        <Text style={{ color: '#34d399', fontSize: 12, fontWeight: '700' }}>
-                          🏆 Trick Won by {getPlayerName(lastTrick.winnerId)}
-                        </Text>
-                      </View>
-                    )}
-
                     {/* Trick Cards on Table */}
-                    <View style={{ flexDirection: 'row', justifyContent: 'center', gap: 12, marginTop: 12, minHeight: 84, alignItems: 'center' }}>
+                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 8, marginTop: 10, minHeight: 74, alignItems: 'center' }}>
                       {displayCards.length === 0 ? (
                         <View style={{ alignItems: 'center', paddingVertical: 12 }}>
                           <Text style={{ color: '#94a3b8', fontStyle: 'italic', fontSize: 13 }}>
@@ -1291,18 +1505,41 @@ export default function App() {
                       ) : (
                         displayCards.map((play, idx) => {
                           const isRed = play.card.suit === 'Hearts' || play.card.suit === 'Diamonds';
+                          const suitColor = isRed ? '#dc2626' : '#0f172a';
+                          const suitSymbol =
+                            play.card.suit === 'Spades'
+                              ? '♠'
+                              : play.card.suit === 'Hearts'
+                              ? '♥'
+                              : play.card.suit === 'Diamonds'
+                              ? '♦'
+                              : '♣';
+                          const seatPlayer = currentRoom.game_state.players?.find(p => p.user_id === play.user_id);
+                          const isCompactTrick = (currentRoom.game_state.players?.length || 4) >= 5;
+
                           return (
-                            <View key={idx} style={{ alignItems: 'center' }}>
-                              <View style={[styles.cardPlaceholder, { width: 52, height: 74, backgroundColor: '#ffffff', justifyContent: 'center', alignItems: 'center', borderRadius: 6 }]}>
-                                <Text style={{ color: isRed ? '#ef4444' : '#111827', fontWeight: 'bold', fontSize: 16, position: 'absolute', top: 4, left: 6 }}>
+                            <View key={`${play.user_id}-${idx}`} style={{ alignItems: 'center' }}>
+                              <View
+                                style={{
+                                  width: isCompactTrick ? 44 : 52,
+                                  height: isCompactTrick ? 62 : 74,
+                                  backgroundColor: '#ffffff',
+                                  borderRadius: 6,
+                                  borderWidth: 1,
+                                  borderColor: '#cbd5e1',
+                                  padding: 4,
+                                  justifyContent: 'space-between',
+                                }}
+                              >
+                                <Text style={{ color: suitColor, fontWeight: '800', fontSize: isCompactTrick ? 13 : 15, lineHeight: 15 }}>
                                   {play.card.rank}
                                 </Text>
-                                <Text style={{ fontSize: 20 }}>
-                                  {play.card.suit === 'Spades' ? '♠️' : play.card.suit === 'Hearts' ? '♥️' : play.card.suit === 'Diamonds' ? '♦️' : '♣️'}
+                                <Text style={{ color: suitColor, fontSize: isCompactTrick ? 20 : 24, textAlign: 'center', lineHeight: isCompactTrick ? 22 : 26 }}>
+                                  {suitSymbol}
                                 </Text>
                               </View>
-                              <Text style={{ color: '#ffffff', fontSize: 11, marginTop: 5, fontWeight: '700', maxWidth: 70 }} numberOfLines={1}>
-                                {getPlayerName(play.user_id)}
+                              <Text style={{ color: '#9ca3af', fontSize: isCompactTrick ? 10 : 11, marginTop: isCompactTrick ? 3 : 5, fontWeight: '600' }} numberOfLines={1}>
+                                {seatPlayer?.nickname || `Seat ${seatPlayer?.seat_number || '?'}`}
                               </Text>
                             </View>
                           );
@@ -1525,109 +1762,112 @@ export default function App() {
             })()}
             
             <View style={{ overflow: 'visible', marginTop: 8 }}>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ flexDirection: 'row', justifyContent: 'center', alignItems: 'flex-end', paddingTop: 32, paddingBottom: 12, paddingHorizontal: 12, minHeight: 130, overflow: 'visible' }}>
-              {(() => {
-                const myHand = sortHand(currentRoom.game_state?.hands?.[userId] || []);
-                const mySeat = currentRoom.game_state?.players?.find(p => p.user_id === userId)?.seat_number;
-                const isMyTurn = currentRoom.game_state?.phase === 'trick' && 
-                                 String(currentRoom.game_state?.activeSeat) === String(mySeat) && 
-                                 !trickHold;
-                const activeTrick = currentRoom.game_state?.trick || [];
-                const leadCard = activeTrick.length > 0 ? activeTrick[0].card : null;
+            {(() => {
+              const rawHand = currentRoom.game_state?.hands?.[userId] || [];
+              const myHand = sortHand(rawHand);
+              const mySeat = currentRoom.game_state?.players?.find(p => p.user_id === userId)?.seat_number;
+              const isTrickPhase = currentRoom.game_state?.phase === 'trick';
+              const isMyTurn = isTrickPhase &&
+                               String(currentRoom.game_state?.activeSeat) === String(mySeat) &&
+                               !trickHold;
+              const activeTrick = currentRoom.game_state?.trick || [];
+              const leadCard = activeTrick.length > 0 ? activeTrick[0].card : null;
 
-                return myHand.map((card, idx) => {
-                  const isSelected = selectedCardIdx === idx;
-                  const isLegal = isMyTurn ? isValidPlay(myHand, card, leadCard) : false;
-                  const canInteract = isMyTurn && isLegal;
-                  const isRed = card.suit === 'Hearts' || card.suit === 'Diamonds';
-                  const cardColor = isRed ? '#dc2626' : '#0f172a';
-                  const symbol = card.suit === 'Spades' ? '♠' : card.suit === 'Hearts' ? '♥' : card.suit === 'Diamonds' ? '♦' : '♣';
+              // Keep existing -24px overlap for <= 13 cards; compress dynamically only for >= 14 cards
+              const isCompactHand = myHand.length >= 14;
+              const maxHandWidth = Math.min(windowWidth - 36, 386);
+              const cardWidth = 52;
+              const overlapMargin = isCompactHand
+                ? Math.min(-24, -Math.ceil(cardWidth - (maxHandWidth - cardWidth) / (myHand.length - 1)))
+                : -24;
 
-                  const cardUniqueId = `${card.suit}-${card.rank}`;
-                  const onCardPress = () => {
-                    if (!canInteract || animatingCardId !== null) return;
-                    if (isSelected) {
-                      // Step 2: Launch card toward center table without dropping back down
-                      const cardId = `${card.suit}-${card.rank}`;
-                      // Add card to hidden set first to ensure it stays hidden
-                      setHiddenCards(prev => new Set([...prev, cardId]));
-                      setAnimatingCardId(cardId);
-                      flyAnimY.setValue(-18);
-                      flyAnimScale.setValue(1);
-                      flyAnimOpacity.setValue(1);
+              return (
+                <View style={{ flexDirection: 'row', justifyContent: 'center', alignItems: 'center', height: 100 }}>
+                  {myHand.map((card, idx) => {
+                const isSelected = selectedCardIdx === idx;
+                const isLegal = isMyTurn ? isValidPlay(myHand, card, leadCard) : false;
+                const canInteract = isMyTurn && isLegal;
+                const isDisabledOffSuit = isMyTurn && !isLegal;
 
-                      Animated.parallel([
-                        Animated.timing(flyAnimY, {
-                          toValue: -80, // Snappy upward flick
-                          duration: 150,
-                          easing: Easing.out(Easing.ease),
-                          useNativeDriver: true,
-                        }),
-                        Animated.timing(flyAnimScale, {
-                          toValue: 0.7, // Shrinks as it moves away
-                          duration: 150,
-                          useNativeDriver: true,
-                        }),
-                        Animated.timing(flyAnimOpacity, {
-                          toValue: 0, // Fades out completely as it leaves the hand
-                          duration: 150,
-                          useNativeDriver: true,
-                        }),
-                      ]).start(() => {
-                        const rawIndex = currentRoom.game_state.hands[userId].findIndex(
-                          c => c.suit === card.suit && c.rank === card.rank
-                        );
-                        handlePlayCard(rawIndex !== -1 ? rawIndex : idx, card);
-                        setSelectedCardIdx(null);
-                        // Reset animating state after animation completes - card remains in hiddenCards until removed
-                        setAnimatingCardId(null);
-                      });
-                    } else {
-                      // Step 1: Elevate selected card
-                      setSelectedCardIdx(idx);
-                    }
-                  };
+                const isRed = card.suit === 'Hearts' || card.suit === 'Diamonds';
+                const cardColor = isDisabledOffSuit ? '#334155' : (isRed ? '#dc2626' : '#0f172a');
+                const symbol = card.suit === 'Spades' ? '♠' : card.suit === 'Hearts' ? '♥' : card.suit === 'Diamonds' ? '♦' : '♣';
 
-                  const isCardAnimating = animatingCardId === cardUniqueId;
-                  const isCardHidden = hiddenCards.has(cardUniqueId);
-                  // If card is hidden, keep it at opacity 0 until it's removed from the hand
-                  const finalOpacity = isCardHidden ? 0 : (isCardAnimating ? flyAnimOpacity : (isMyTurn ? (isLegal ? 1 : 0.35) : 0.8));
-                  const translateYValue = isCardAnimating ? flyAnimY : (isSelected ? -18 : 0);
-                  const scaleValue = isCardAnimating ? flyAnimScale : 1;
+                const isCardAnimating = animatingCardIdx === idx;
+                const translateYValue = isCardAnimating ? flyAnimY : (isSelected ? -18 : 0);
+                const scaleValue = isCardAnimating ? flyAnimScale : 1;
 
-                  return (
-                    <AnimatedTouchable
-                      key={`${card.suit}-${card.rank}-${idx}`}
-                      activeOpacity={0.85}
-                      disabled={!canInteract || animatingCardId !== null}
-                      onPress={onCardPress}
-                      style={[
-                        styles.cardPlaceholder,
-                        { 
-                          marginLeft: idx === 0 ? 0 : -30,
-                          zIndex: isCardAnimating ? 999 : (isSelected ? 99 : idx),
-                          backgroundColor: isMyTurn && !isLegal ? '#cbd5e1' : '#ffffff',
-                          opacity: finalOpacity,
-                          borderColor: isSelected ? '#38bdf8' : (isLegal && isMyTurn ? '#93c5fd' : '#cbd5e1'),
-                          borderWidth: isSelected ? 2 : 1,
-                          transform: [
-                            { translateY: translateYValue },
-                            { scale: scaleValue }
-                          ]
-                        }
-                      ]}
-                    >
-                      <Text style={{ color: cardColor, fontWeight: 'bold', fontSize: 18, position: 'absolute', top: 6, left: 6 }}>
+                const onCardPress = () => {
+                  if (!canInteract || animatingCardIdx !== null) return;
+                  if (isSelected) {
+                    if (typeof soundManager !== 'undefined') soundManager.playCardThrow?.();
+                    setAnimatingCardIdx(idx);
+                    flyAnimY.setValue(-18);
+                    flyAnimScale.setValue(1);
+
+                    Animated.parallel([
+                      Animated.timing(flyAnimY, {
+                        toValue: -85,
+                        duration: 150,
+                        easing: Easing.out(Easing.ease),
+                        useNativeDriver: true,
+                      }),
+                      Animated.timing(flyAnimScale, {
+                        toValue: 0.75,
+                        duration: 150,
+                        useNativeDriver: true,
+                      }),
+                    ]).start(() => {
+                      const rawIndex = (currentRoom.game_state?.hands?.[userId] || []).findIndex(
+                        c => c.suit === card.suit && c.rank === card.rank
+                      );
+                      handlePlayCard(rawIndex !== -1 ? rawIndex : idx, card);
+                      setSelectedCardIdx(null);
+                      setAnimatingCardIdx(null);
+                    });
+                  } else {
+                    if (typeof soundManager !== 'undefined') soundManager.playCardSelect?.();
+                    setSelectedCardIdx(idx);
+                  }
+                };
+
+                return (
+                  <AnimatedTouchable
+                    key={`${card.suit}-${card.rank}-${idx}`}
+                    activeOpacity={0.9}
+                    disabled={!canInteract || animatingCardIdx !== null}
+                    onPress={onCardPress}
+                    style={[
+                      styles.playingCard,
+                      idx > 0 && { marginLeft: overlapMargin },
+                      {
+                        opacity: 1,
+                        zIndex: isCardAnimating ? 999 : (isSelected ? 99 : idx + 1),
+                        backgroundColor: isDisabledOffSuit ? '#64748b' : '#ffffff',
+                        borderColor: isSelected ? '#38bdf8' : (isLegal && isMyTurn ? '#3b82f6' : '#cbd5e1'),
+                        borderWidth: isSelected ? 2 : 1,
+                        transform: [
+                          { translateY: translateYValue },
+                          { scale: scaleValue }
+                        ]
+                      }
+                    ]}
+                  >
+                    <View style={[styles.cardTopCorner, isCompactHand && styles.cardTopCornerCompact]}>
+                      <Text style={[styles.cardCornerRank, isCompactHand && styles.cardCornerTextCompact, { color: cardColor }]}>
                         {card.rank}
                       </Text>
-                      <Text style={{ fontSize: 24 }}>
-                        {card.suit === 'Spades' ? '♠️' : card.suit === 'Hearts' ? '♥️' : card.suit === 'Diamonds' ? '♦️' : '♣️'}
+                      <Text style={[styles.cardCornerSuit, isCompactHand && styles.cardCornerTextCompact, { color: cardColor }]}>
+                        {symbol}
                       </Text>
-                    </AnimatedTouchable>
-                  );
-                });
-              })()}
-            </ScrollView>
+                    </View>
+                    <Text style={[styles.cardCenterSymbol, { color: cardColor }]}>{symbol}</Text>
+                  </AnimatedTouchable>
+                );
+              })}
+                </View>
+              );
+            })()}
             </View>
           </View>
 
@@ -1647,7 +1887,67 @@ const styles = StyleSheet.create({
   title: { fontSize: 32, fontWeight: 'bold', color: '#ffffff', textAlign: 'center' },
   subtitle: { fontSize: 14, color: '#9ca3af', marginBottom: 20, textAlign: 'center' },
   card: { backgroundColor: '#1e293b', padding: 24, borderRadius: 12, width: '100%', maxWidth: 400, borderWidth: 1, borderColor: '#374151' },
-  cardWide: { backgroundColor: '#1e293b', padding: 24, borderRadius: 12, width: '100%', maxWidth: 640, borderWidth: 1, borderColor: '#374151' },
+  cardWide: {
+    backgroundColor: '#1e293b',
+    paddingHorizontal: 12,
+    paddingVertical: 14,
+    borderRadius: 24,
+    width: '100%',
+    maxWidth: 414,
+    minHeight: 780,
+    alignSelf: 'center',
+    justifyContent: 'space-between',
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#374151',
+  },
+  boardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+    borderBottomWidth: 1,
+    borderColor: '#334155',
+    paddingBottom: 8,
+  },
+  boardTitle: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: '#ffffff',
+  },
+  boardSubTitle: {
+    fontSize: 13,
+    color: '#9ca3af',
+    marginTop: 2,
+  },
+  opponentsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    gap: 8,
+    marginBottom: 8,
+  },
+  opponentCard: {
+    width: '31%',
+    backgroundColor: '#0f172a',
+    borderRadius: 8,
+    paddingVertical: 7,
+    paddingHorizontal: 6,
+    borderWidth: 1,
+    borderColor: '#334155',
+    alignItems: 'center',
+  },
+  oppNameText: {
+    color: '#ffffff',
+    fontWeight: '700',
+    fontSize: 11.5,
+    marginBottom: 3,
+  },
+  oppContractText: {
+    color: '#38bdf8',
+    fontWeight: '700',
+    fontSize: 10.5,
+  },
   cardTitle: { fontSize: 20, fontWeight: '700', color: '#ffffff', marginBottom: 16, textAlign: 'center' },
   lobbyTitle: { fontSize: 24, fontWeight: '800', color: '#ffffff', textAlign: 'center' },
   subTitleText: { color: '#9ca3af', textAlign: 'center', marginBottom: 16, fontSize: 14 },
@@ -1671,6 +1971,49 @@ const styles = StyleSheet.create({
   centerArenaTitle: { color: '#ffffff', fontSize: 18, fontWeight: '700', marginBottom: 6 },
   centerArenaSubText: { color: '#9ca3af', fontSize: 13, textAlign: 'center' },
   cardPlaceholder: { width: 60, height: 85, borderRadius: 8, borderWidth: 1, borderColor: '#d1d5db', alignItems: 'center', justifyContent: 'center', elevation: 3, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 3 },
+  playingCard: {
+    width: 52,
+    height: 80,
+    backgroundColor: '#ffffff',
+    borderRadius: 6,
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    padding: 4,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    shadowColor: '#000',
+    shadowOffset: { width: -1, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3,
+    elevation: 3,
+  },
+  cardTopCorner: {
+    flexDirection: 'row',
+    gap: 2,
+  },
+  cardTopCornerCompact: {
+    flexDirection: 'column',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    width: 15,
+    gap: 0,
+  },
+  cardCornerRank: {
+    fontSize: 14,
+    fontWeight: 'bold',
+  },
+  cardCornerSuit: {
+    fontSize: 14,
+  },
+  cardCornerTextCompact: {
+    fontSize: 12,
+    lineHeight: 14,
+  },
+  cardCenterSymbol: {
+    fontSize: 24,
+    textAlign: 'center',
+    marginBottom: 8,
+  },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.75)', justifyContent: 'center', alignItems: 'center', padding: 16 },
   scoreModalContent: { backgroundColor: '#0f172a', borderRadius: 12, padding: 16, width: '100%', maxWidth: 580, borderWidth: 1, borderColor: '#334155' }
 });
