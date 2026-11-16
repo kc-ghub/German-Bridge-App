@@ -147,6 +147,10 @@ export const getNextSeat = (currentSeat, totalPlayers) => {
   return (currentSeat % totalPlayers) + 1;
 };
 
+export const getSuitColor = (suit) => {
+  return suit === 'Hearts' || suit === 'Diamonds' ? '#ef4444' : '#1f2937';
+};
+
 /**
  * 10. Check Last Bidder (The Dealer / Hook Holder)
  * Given the total players and the number of already committed bids,
@@ -205,4 +209,9 @@ export const resolveTrickWinner = (trickCards, trumpCard) => {
   }
 
   return winningPlay.user_id;
+};
+
+export const getPlayerSeat = (gs, targetUserId, fallbackPlayers = []) => {
+  const roster = gs?.players || fallbackPlayers || [];
+  return roster.find(p => String(p.user_id) === String(targetUserId))?.seat_number;
 };
