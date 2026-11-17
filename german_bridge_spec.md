@@ -3,8 +3,17 @@
 ## 1. Current Architecture & File Structure
 
 ### 1.1 MVP Implementation Stack
-* **UI Layer:** Monolithic [App.js](file:///c:/Local-files/App-dev/German-Bridge-App/App.js) — handles all React Native rendering, Supabase Realtime/Presence integration, URL deep-linking (`?room=XYZ`), Web Audio sound synthesis, and application state management
-* **Game Engine:** Pure decoupled [src/core/gameEngine.js](file:///c:/Local-files/App-dev/German-Bridge-App/src/core/gameEngine.js) — side-effect free game rules and math functions
+* **Root Orchestrator:** Minimal [App.js](file:///c:/Local-files/App-dev/German-Bridge-App/App.js) — maintains Supabase Realtime connections, presence tracking, global state passing, and delegates all UI to feature modules
+* **Core Logic & Services:**
+  * `src/core/gameEngine.js`: Pure JS deterministic game math (Deck generation, Mountain/Valley calculations, "The Hook" forbidden bid, Trick resolution, and Exponential scoring)
+  * `src/services/soundManager.js`: Procedural Web Audio API sound synthesis (zero external `.mp3` dependencies)
+* **Feature Modules (`src/features/`):**
+  * `Lobby/LobbyScreen.js`: Pre-game room configuration, host authentication, deep-link joining, and seat assignment grid
+  * `GameBoard/GameBoard.js`: The active match container, opponent HUDs, and trick pool rendering
+  * `GameBoard/HandView.js`: Dynamic 14-17 card overlap compression, touch elevation, and follow-suit validation rendering
+  * `GameBoard/BidWheel.js`: The iOS-style cylindrical bidding drum
+  * `Scorecard/ScorecardModal.js`: Post-round historical point ledger and cumulative ranking
+  * `Rules/HowToPlayModal.js`: Read-only rules guide covering Mountain/Valley phases, The Hook, and trick-taking basics
 * **Test Suite:** [src/core/testEngine.js](file:///c:/Local-files/App-dev/German-Bridge-App/src/core/testEngine.js) / `testEngine.mjs` — unit test validation for all engine logic
 * **State Sync:** `game_state` JSONB column in Supabase `rooms` table — client-authoritative, synced via Supabase Realtime
 * **Room Operations:** Postgres RPC functions (`create_quick_room`, `join_room_with_passcode`, `verify_host_password`) for room creation/joining only

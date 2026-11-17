@@ -4,21 +4,30 @@
 A real-time, cross-platform online card game application for "German Bridge" built with React Native (Expo) and Supabase. The platform supports anonymous guest entry, invitation-only quick rooms, Supabase Realtime state sync, and client-authoritative gameplay with Postgres RPC room management.
 
 ## 2. Technology Stack
-- **Frontend Framework:** React Native via Expo (JavaScript) — monolithic [App.js](file:///c:/Local-files/App-dev/German-Bridge-App/App.js) handles all UI, state management, Supabase integration, deep-linking, and Web Audio sound synthesis
+- **Frontend Framework:** React Native via Expo (JavaScript) — minimal [App.js](file:///c:/Local-files/App-dev/German-Bridge-App/App.js) root orchestrator maintains Supabase Realtime connections, presence tracking, global state passing, and delegates all UI to feature modules
 - **Backend / BaaS:** Supabase
   - **Auth:** Anonymous Sign-Ins only (no email/password login required for MVP)
   - **Database:** PostgreSQL with Row Level Security (RLS) — `rooms` table stores `game_state` as JSONB
   - **State Mechanics:** Client-authoritative game state synced via Supabase Realtime; room creation/joining uses Postgres RPC functions (`create_quick_room`, `join_room_with_passcode`, `verify_host_password`)
   - **Realtime:** Supabase Realtime Channels for state broadcast and Presence for lobby seating
 - **Game Engine:** Pure JavaScript [src/core/gameEngine.js](file:///c:/Local-files/App-dev/German-Bridge-App/src/core/gameEngine.js) — decoupled game rules and math
+- **Services:** [src/services/soundManager.js](file:///c:/Local-files/App-dev/German-Bridge-App/src/services/soundManager.js) — procedural Web Audio API sound synthesis (zero external `.mp3` dependencies)
+- **Feature Modules:** `src/features/` directory containing discrete UI modules (Lobby, GameBoard, HandView, BidWheel, Scorecard, Rules)
 - **Test Suite:** [src/core/testEngine.js](file:///c:/Local-files/App-dev/German-Bridge-App/src/core/testEngine.js) / `testEngine.mjs` — unit tests for game engine logic
 - **Version Control:** Git & GitHub
 
 ## 3. Current MVP Architecture
 - **File Structure:**
-  - `App.js` — Monolithic UI layer, handles Supabase Realtime/Presence, deep-linking (`?room=XYZ` URL params), Web Audio sound synthesis, and all application state
+  - `App.js` — Minimal root orchestrator, handles Supabase Realtime/Presence, deep-linking (`?room=XYZ` URL params), global state passing, and delegates UI to feature modules
   - `src/core/gameEngine.js` — Pure game rules and math (no side effects, fully testable)
   - `src/core/testEngine.js` — Unit test suite for game engine validation
+  - `src/services/soundManager.js` — Web Audio procedural sound synthesis
+  - `src/features/Lobby/LobbyScreen.js` — Pre-game room configuration, host authentication, deep-link joining, and seat assignment grid
+  - `src/features/GameBoard/GameBoard.js` — Active match container, opponent HUDs, and trick pool rendering
+  - `src/features/GameBoard/HandView.js` — Dynamic 14-17 card overlap compression, touch elevation, and follow-suit validation rendering
+  - `src/features/GameBoard/BidWheel.js` — iOS-style cylindrical bidding drum
+  - `src/features/Scorecard/ScorecardModal.js` — Post-round historical point ledger and cumulative ranking
+  - `src/features/Rules/HowToPlayModal.js` — Read-only rules guide covering Mountain/Valley phases, The Hook, and trick-taking basics
   - `supabaseClient.js` — Supabase initialization
 - **State Sync Model:** `game_state` (JSONB column in `rooms` table) is currently client-authoritative and synced via Supabase Realtime. Room creation/joining operations use Postgres RPCs for validation.
 
@@ -51,7 +60,12 @@ A real-time, cross-platform online card game application for "German Bridge" bui
   - Web Audio sound synthesis.
   - Scorecard modal and Winner Podium.
 
-- **Phase 4: Post-MVP Enhancements** (DEFERRED)
+- **Phase 4: Modular Architecture Refactor** (COMPLETED)
+  - Split monolithic App.js into minimal root orchestrator + discrete feature modules.
+  - Created separate feature modules for Lobby, GameBoard, HandView, BidWheel, Scorecard, and Rules.
+  - Centralized sound management into dedicated service module.
+
+- **Phase 5: Post-MVP Enhancements** (DEFERRED)
   - User login/profiles system.
   - Multi-language switcher (`en_US` / `zh_HK`).
   - Additional card games (四十分, 爭上游).

@@ -31,13 +31,23 @@ export default function LobbyScreen({
   onJoinRoom,
   onStartGame,
   onLeaveTable,
-  copyInviteLink
+  copyInviteLink,
+  onOpenRules
 }) {
   return (
     <>
       {!userRole && !currentRoom && (
         <View style={styles.card}>
-          <Text style={styles.cardTitle}>Game Access</Text>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+            <Text style={styles.cardTitle}>Game Access</Text>
+            <TouchableOpacity
+              onPress={onOpenRules}
+              style={{ backgroundColor: '#0f172a', paddingVertical: 6, paddingHorizontal: 10, borderRadius: 8, borderWidth: 1, borderColor: '#334155', flexDirection: 'row', alignItems: 'center', gap: 4 }}
+            >
+              <Text style={{ fontSize: 12 }}>📖</Text>
+              <Text style={{ color: '#e2e8f0', fontSize: 12, fontWeight: '700' }}>Rules</Text>
+            </TouchableOpacity>
+          </View>
           <TouchableOpacity style={styles.button} onPress={() => setUserRole('guest')}>
             <Text style={styles.btnText}>Join Game as Invitee</Text>
           </TouchableOpacity>
@@ -186,8 +196,19 @@ export default function LobbyScreen({
 
       {currentRoom && currentRoom.status === 'lobby' && (
         <View style={styles.cardWide}>
-          <Text style={styles.lobbyTitle}>Game Desk Number: <Text style={{ color: '#60a5fa' }}>{currentRoom.id}</Text></Text>
-          <Text style={styles.subTitleText}>Mode: {currentRoom.round_mode?.toUpperCase()} • Seats Occupied: {players.length}/{currentRoom.max_players}</Text>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.lobbyTitle}>Game Desk Number: <Text style={{ color: '#60a5fa' }}>{currentRoom.id}</Text></Text>
+              <Text style={styles.subTitleText}>Mode: {currentRoom.round_mode?.toUpperCase()} • Seats Occupied: {players.length}/{currentRoom.max_players}</Text>
+            </View>
+            <TouchableOpacity
+              onPress={onOpenRules}
+              style={{ backgroundColor: '#0f172a', paddingVertical: 6, paddingHorizontal: 10, borderRadius: 8, borderWidth: 1, borderColor: '#334155', flexDirection: 'row', alignItems: 'center', gap: 4, marginLeft: 10 }}
+            >
+              <Text style={{ fontSize: 12 }}>📖</Text>
+              <Text style={{ color: '#e2e8f0', fontSize: 12, fontWeight: '700' }}>Rules</Text>
+            </TouchableOpacity>
+          </View>
 
           <TouchableOpacity style={[styles.button, { backgroundColor: '#8b5cf6', marginBottom: 20 }]} onPress={copyInviteLink}>
             <Text style={styles.btnText}>🔗 Copy Invite Link for Friends</Text>

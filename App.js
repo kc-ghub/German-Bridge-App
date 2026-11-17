@@ -32,6 +32,7 @@ import {
 } from './src/core/gameEngine';
 import { soundManager } from './src/services/soundManager';
 import ScorecardModal from './src/features/Scorecard/ScorecardModal';
+import HowToPlayModal from './src/features/Rules/HowToPlayModal';
 import { GameBoard } from './src/features/GameBoard';
 import LobbyScreen from './src/features/Lobby/LobbyScreen';
 
@@ -89,9 +90,12 @@ export default function App() {
 
   // Channel reference
   const channelRef = useRef(null);
+  const currentRoomRef = useRef(currentRoom);
+  currentRoomRef.current = currentRoom;
 
   // Scorecard Modal State
   const [showScoreModal, setShowScoreModal] = useState(false);
+  const [showRulesModal, setShowRulesModal] = useState(false);
   
   // Sound state
   const [isSoundMuted, setIsSoundMuted] = useState(false);
@@ -125,6 +129,28 @@ export default function App() {
       setErrorLog(err.message);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const syncLatestRoom = async (roomId) => {
+    if (!roomId) return;
+    try {
+      const { data: latestRoom, error } = await supabase
+        .from('rooms')
+        .select('*')
+        .eq('id', roomId)
+        .single();
+
+      if (error || !latestRoom) return;
+
+      const hasStatusChanged = latestRoom.status !== currentRoomRef.current?.status;
+      const hasGameStateChanged = JSON.stringify(latestRoom.game_state) !== JSON.stringify(currentRoomRef.current?.game_state);
+
+      if (hasStatusChanged || hasGameStateChanged) {
+        setCurrentRoom(latestRoom);
+      }
+    } catch {
+      // Ignore transient network errors
     }
   };
 
@@ -276,6 +302,7 @@ export default function App() {
           is_host: currentRoom.host_id === userId,
           joined_at: Date.now()
         });
+        syncLatestRoom(currentRoom.id);
       }
     });
 
@@ -285,6 +312,42 @@ export default function App() {
       channelRef.current = null;
     };
   }, [currentRoom?.id, userId]);
+
+  // 2a. Foreground Recovery: Sync room state when tab becomes visible or window gains focus
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof document === 'undefined') return;
+
+    const handleForeground = () => {
+      if (currentRoomRef.current?.id) {
+        syncLatestRoom(currentRoomRef.current.id);
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        handleForeground();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('focus', handleForeground);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('focus', handleForeground);
+    };
+  }, []);
+
+  // 2b. Active-Match Safety Watchdog: Poll every 4s during active gameplay as fallback
+  useEffect(() => {
+    if (!currentRoom?.id || currentRoom.status !== 'playing') return;
+
+    const watchdogInterval = setInterval(() => {
+      syncLatestRoom(currentRoom.id);
+    }, 4000);
+
+    return () => clearInterval(watchdogInterval);
+  }, [currentRoom?.id, currentRoom?.status]);
 
   // 3. Automated Round Transition Countdown (Configurable: 5-15s or Manual)
   useEffect(() => {
@@ -865,6 +928,7 @@ export default function App() {
         onStartGame={handleStartGame}
         onLeaveTable={handleLeaveTable}
         copyInviteLink={copyInviteLink}
+        onOpenRules={() => setShowRulesModal(true)}
       />
 
       <ScorecardModal
@@ -872,6 +936,11 @@ export default function App() {
         onClose={() => setShowScoreModal(false)}
         gameState={currentRoom?.game_state}
         players={players}
+      />
+
+      <HowToPlayModal
+        visible={showRulesModal}
+        onClose={() => setShowRulesModal(false)}
       />
 
       {currentRoom && currentRoom.status === 'playing' && (
@@ -901,6 +970,7 @@ export default function App() {
           onResetToLobby={handleResetToLobby}
           onLeaveTable={handleLeaveTable}
           soundManager={soundManager}
+          onOpenRules={() => setShowRulesModal(true)}
         />
       )}
     </ScrollView>

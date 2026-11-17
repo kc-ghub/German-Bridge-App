@@ -1,8 +1,8 @@
 # Phase 2 Gameplay & Client-Authoritative Architecture Specification
 
 ## 1. Client-Authoritative Strategy (Current MVP Implementation)
-- **Logic Location:** Core gameplay state updates, deck dealing, hand evaluations, turn progression, and bid calculations are executed client-side in [App.js](file:///c:/Local-files/App-dev/German-Bridge-App/App.js) using pure math functions from [src/core/gameEngine.js](file:///c:/Local-files/App-dev/German-Bridge-App/src/core/gameEngine.js).
-- **Client Role:** The React Native frontend executes game logic, updates `game_state` JSONB in Supabase `rooms` table, and listens to Supabase Realtime updates for state synchronization.
+- **Logic Location:** Core gameplay state updates, deck dealing, hand evaluations, turn progression, and bid calculations are executed client-side using pure math functions from [src/core/gameEngine.js](file:///c:/Local-files/App-dev/German-Bridge-App/src/core/gameEngine.js).
+- **Client Role:** Feature modules execute game logic, update `game_state` JSONB in Supabase `rooms` table, and listen to Supabase Realtime updates for state synchronization.
 - **Server Role:** Supabase PostgreSQL only validates room membership via RLS and broadcasts state changes via Realtime. No server-side game logic execution for MVP.
 - **Post-MVP Roadmap:** Future phases will migrate critical game state transitions to server-authoritative Postgres RPC functions for anti-cheat protection.
 

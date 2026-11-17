@@ -28,7 +28,8 @@ const GameBoard = ({
   onEndGame,
   onResetToLobby,
   onLeaveTable,
-  soundManager
+  soundManager,
+  onOpenRules
 }) => {
   const getPlayerName = (identifier) => {
     const playersList = currentRoom?.game_state?.players || [];
@@ -54,6 +55,14 @@ const GameBoard = ({
         </View>
 
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginRight: 10 }}>
+          <TouchableOpacity
+            onPress={onOpenRules}
+            style={{ backgroundColor: '#0f172a', paddingVertical: 7, paddingHorizontal: 10, borderRadius: 8, borderWidth: 1, borderColor: '#334155', flexDirection: 'row', alignItems: 'center', gap: 4 }}
+          >
+            <Text style={{ fontSize: 12 }}>📖</Text>
+            <Text style={{ color: '#e2e8f0', fontSize: 12, fontWeight: '700' }}>Rules</Text>
+          </TouchableOpacity>
+
           <TouchableOpacity
             onPress={() => setShowScoreModal(true)}
             style={{ backgroundColor: '#0f172a', paddingVertical: 7, paddingHorizontal: 10, borderRadius: 8, borderWidth: 1, borderColor: '#334155', flexDirection: 'row', alignItems: 'center', gap: 4 }}
