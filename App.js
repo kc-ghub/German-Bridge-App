@@ -39,41 +39,6 @@ import LobbyScreen from './src/features/Lobby/LobbyScreen';
 
 const AnimatedTouchable = Animated.createAnimatedComponent(TouchableOpacity);
 
-// Web PWA viewport & overscroll protection
-useEffect(() => {
-  if (Platform.OS !== 'web' || typeof document === 'undefined') return;
-  
-  // Set viewport meta tag to prevent zoom
-  let viewportMeta = document.querySelector('meta[name="viewport"]');
-  if (!viewportMeta) {
-    viewportMeta = document.createElement('meta');
-    viewportMeta.name = 'viewport';
-    document.head.appendChild(viewportMeta);
-  }
-  viewportMeta.content = 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover';
-  
-  // Add Apple PWA meta tags
-  let appleCapable = document.querySelector('meta[name="apple-mobile-web-app-capable"]');
-  if (!appleCapable) {
-    appleCapable = document.createElement('meta');
-    appleCapable.name = 'apple-mobile-web-app-capable';
-    appleCapable.content = 'yes';
-    document.head.appendChild(appleCapable);
-  }
-  
-  let appleStatusBar = document.querySelector('meta[name="apple-mobile-web-app-status-bar-style"]');
-  if (!appleStatusBar) {
-    appleStatusBar = document.createElement('meta');
-    appleStatusBar.name = 'apple-mobile-web-app-status-bar-style';
-    appleStatusBar.content = 'black-translucent';
-    document.head.appendChild(appleStatusBar);
-  }
-  
-  // Prevent pull-to-refresh and double-tap zoom
-  document.documentElement.style.overscrollBehaviorY = 'none';
-  document.body.style.touchAction = 'manipulation';
-}, []);
-
 class ErrorBoundary extends Component {
   constructor(props) {
     super(props);
@@ -135,6 +100,41 @@ const getSession = (key) => {
   };
 
 export default function App() {
+  // Web PWA viewport & overscroll protection
+  useEffect(() => {
+    if (Platform.OS !== 'web' || typeof document === 'undefined') return;
+    
+    // Set viewport meta tag to prevent zoom
+    let viewportMeta = document.querySelector('meta[name="viewport"]');
+    if (!viewportMeta) {
+      viewportMeta = document.createElement('meta');
+      viewportMeta.name = 'viewport';
+      document.head.appendChild(viewportMeta);
+    }
+    viewportMeta.content = 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover';
+    
+    // Add Apple PWA meta tags
+    let appleCapable = document.querySelector('meta[name="apple-mobile-web-app-capable"]');
+    if (!appleCapable) {
+      appleCapable = document.createElement('meta');
+      appleCapable.name = 'apple-mobile-web-app-capable';
+      appleCapable.content = 'yes';
+      document.head.appendChild(appleCapable);
+    }
+    
+    let appleStatusBar = document.querySelector('meta[name="apple-mobile-web-app-status-bar-style"]');
+    if (!appleStatusBar) {
+      appleStatusBar = document.createElement('meta');
+      appleStatusBar.name = 'apple-mobile-web-app-status-bar-style';
+      appleStatusBar.content = 'black-translucent';
+      document.head.appendChild(appleStatusBar);
+    }
+    
+    // Prevent pull-to-refresh and double-tap zoom
+    document.documentElement.style.overscrollBehaviorY = 'none';
+    document.body.style.touchAction = 'manipulation';
+  }, []);
+
   // Screen dimensions
   const { width: windowWidth } = useWindowDimensions();
 

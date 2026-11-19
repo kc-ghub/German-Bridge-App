@@ -14,7 +14,6 @@
     },
     "web": {
       "bundler": "metro",
-      "output": "single",
       "name": "German Bridge",
       "themeColor": "#0f172a"
     }
