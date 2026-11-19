@@ -1,9 +1,13 @@
 import React from 'react';
-import { StyleSheet, Text, View, Animated, Easing, TouchableOpacity, useWindowDimensions } from 'react-native';
+import { StyleSheet, Text, View, Animated, Easing, TouchableOpacity, Platform } from 'react-native';
 import { isValidPlay, sortHand } from '../../core/gameEngine';
 import { soundManager } from '../../services/soundManager';
 
 const AnimatedTouchable = Animated.createAnimatedComponent(TouchableOpacity);
+
+const CARD_WIDTH = 54;
+const CARD_HEIGHT = 84;
+const MAX_EXPOSED_WIDTH = 30;
 
 export default function HandView({ 
   hand, 
@@ -15,29 +19,30 @@ export default function HandView({
   animatingCardIdx,
   setAnimatingCardIdx,
   flyAnimY,
-  flyAnimScale
+  flyAnimScale,
+  loading,
+  handAreaWidth = 0,
+  width = 400
 }) {
-  const { width: windowWidth } = useWindowDimensions();
-
   const myHand = sortHand(hand || []);
 
-  const isCompactHand = myHand.length >= 14;
-  const maxHandWidth = Math.min(windowWidth - 36, 386);
-  const cardWidth = 52;
-  const overlapMargin = isCompactHand
-    ? Math.min(-24, -Math.ceil(cardWidth - (maxHandWidth - cardWidth) / (myHand.length - 1)))
-    : -24;
+  const measuredWidth = handAreaWidth > 0 ? handAreaWidth : Math.min(width - 48, 366);
+  const safeWidth = Math.max(250, measuredWidth - 8);
+  const fitExposedWidth = myHand.length > 1
+    ? (safeWidth - CARD_WIDTH) / (myHand.length - 1)
+    : CARD_WIDTH;
+  const exposedWidth = Math.min(MAX_EXPOSED_WIDTH, fitExposedWidth);
+  const overlapMargin = myHand.length > 1 ? -(CARD_WIDTH - exposedWidth) : 0;
 
   return (
-    <View style={{ flexDirection: 'row', justifyContent: 'center', alignItems: 'center', height: 100 }}>
+    <View style={{ flexDirection: 'row', justifyContent: 'center', alignItems: 'flex-end', paddingTop: 22, paddingBottom: 6, overflow: 'visible' }}>
       {myHand.map((card, idx) => {
         const isSelected = selectedIndex === idx;
         const isLegal = isMyTurn ? isValidPlay(myHand, card, leadCard) : false;
-        const canInteract = isMyTurn && isLegal;
-        const isDisabledOffSuit = isMyTurn && !isLegal;
+        const isMyTurnToPlay = isMyTurn && !loading;
 
         const isRed = card.suit === 'Hearts' || card.suit === 'Diamonds';
-        const cardColor = isDisabledOffSuit ? '#334155' : (isRed ? '#dc2626' : '#0f172a');
+        const cardColor = isRed ? '#dc2626' : '#0f172a';
         const symbol = card.suit === 'Spades' ? '♠' : card.suit === 'Hearts' ? '♥' : card.suit === 'Diamonds' ? '♦' : '♣';
 
         const isCardAnimating = animatingCardIdx === idx;
@@ -45,9 +50,13 @@ export default function HandView({
         const scaleValue = isCardAnimating ? flyAnimScale : 1;
 
         const onCardPress = () => {
-          if (!canInteract || animatingCardIdx !== null) return;
+          if (!isMyTurnToPlay || animatingCardIdx !== null) return;
+          if (!isLegal) {
+            soundManager.playError?.();
+            return;
+          }
           if (isSelected) {
-            if (typeof soundManager !== 'undefined') soundManager.playCardThrow?.();
+            soundManager.playCardThrow?.();
             setAnimatingCardIdx(idx);
             flyAnimY.setValue(-18);
             flyAnimScale.setValue(1);
@@ -68,7 +77,7 @@ export default function HandView({
               onPlay(idx, card);
             });
           } else {
-            if (typeof soundManager !== 'undefined') soundManager.playCardSelect?.();
+            soundManager.playCardSelect?.();
             onSelect(idx);
           }
         };
@@ -77,7 +86,7 @@ export default function HandView({
           <AnimatedTouchable
             key={`${card.suit}-${card.rank}-${idx}`}
             activeOpacity={0.9}
-            disabled={!canInteract || animatingCardIdx !== null}
+            disabled={!isMyTurnToPlay || animatingCardIdx !== null}
             onPress={onCardPress}
             style={[
               styles.playingCard,
@@ -85,7 +94,7 @@ export default function HandView({
               {
                 opacity: 1,
                 zIndex: isCardAnimating ? 999 : (isSelected ? 99 : idx + 1),
-                backgroundColor: isDisabledOffSuit ? '#64748b' : '#ffffff',
+                backgroundColor: '#ffffff',
                 borderColor: isSelected ? '#38bdf8' : (isLegal && isMyTurn ? '#3b82f6' : '#cbd5e1'),
                 borderWidth: isSelected ? 2 : 1,
                 transform: [
@@ -95,11 +104,11 @@ export default function HandView({
               }
             ]}
           >
-            <View style={[styles.cardTopCorner, isCompactHand && styles.cardTopCornerCompact]}>
-              <Text style={[styles.cardCornerRank, isCompactHand && styles.cardCornerTextCompact, { color: cardColor }]}>
+            <View style={styles.cardTopCorner}>
+              <Text style={[styles.cardCornerRank, { color: cardColor }]}>
                 {card.rank}
               </Text>
-              <Text style={[styles.cardCornerSuit, isCompactHand && styles.cardCornerTextCompact, { color: cardColor }]}>
+              <Text style={[styles.cardCornerSuit, { color: cardColor }]}>
                 {symbol}
               </Text>
             </View>
@@ -113,45 +122,37 @@ export default function HandView({
 
 const styles = StyleSheet.create({
   playingCard: {
-    width: 52,
-    height: 80,
+    width: CARD_WIDTH,
+    height: CARD_HEIGHT,
     backgroundColor: '#ffffff',
-    borderRadius: 6,
+    borderRadius: 8,
     justifyContent: 'space-between',
     alignItems: 'flex-start',
-    padding: 4,
+    padding: 6,
     borderWidth: 1,
     borderColor: '#cbd5e1',
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.2,
-    shadowRadius: 1.5,
-    elevation: 3,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 2,
+    elevation: 4,
   },
   cardTopCorner: {
-    flexDirection: 'row',
-    gap: 2,
-  },
-  cardTopCornerCompact: {
     flexDirection: 'column',
     alignItems: 'center',
-    alignSelf: 'flex-start',
-    width: 15,
-    gap: 0,
+    width: 16,
   },
   cardCornerRank: {
-    fontSize: 14,
-    fontWeight: 'bold',
+    fontSize: 13,
+    fontWeight: '900',
+    lineHeight: 14,
   },
   cardCornerSuit: {
-    fontSize: 14,
-  },
-  cardCornerTextCompact: {
-    fontSize: 12,
+    fontSize: 13,
     lineHeight: 14,
   },
   cardCenterSymbol: {
-    fontSize: 24,
+    fontSize: 30,
     textAlign: 'center',
     marginBottom: 8,
   }

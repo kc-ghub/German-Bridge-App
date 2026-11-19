@@ -4,29 +4,41 @@ import { StyleSheet, Text, View, TextInput, TouchableOpacity } from 'react-nativ
 export default function LobbyScreen({
   userRole,
   setUserRole,
+  statusBanner,
+  setStatusBanner,
+  authView,
+  setAuthView,
+  hostEmail,
+  setHostEmail,
   hostAuthPassword,
   setHostAuthPassword,
+  hostInviteCode,
+  setHostInviteCode,
+  hostSignupNickname,
+  setHostSignupNickname,
+  authenticatedHostEmail,
   isHostAuthenticated,
   nickname,
   setNickname,
-  roomNum,
-  setRoomNum,
   roomPasscode,
   setRoomPasscode,
   maxPlayers,
   setMaxPlayers,
   roundMode,
   setRoundMode,
-  joinRoomNum,
-  setJoinRoomNum,
+  joinRoomCode,
+  setJoinRoomCode,
   joinPasscode,
   setJoinPasscode,
   currentRoom,
   players,
   userId,
   loading,
-  errorLog,
-  onHostAuth,
+  onHostEmailLogin,
+  onHostEmailSignUp,
+  onResendVerification,
+  onForgotPassword,
+  onHostSignOut,
   onCreateRoom,
   onJoinRoom,
   onStartGame,
@@ -34,6 +46,180 @@ export default function LobbyScreen({
   copyInviteLink,
   onOpenRules
 }) {
+  const handleAuthViewChange = (newView) => {
+    setStatusBanner?.(null);
+    setAuthView(newView);
+  };
+
+  const renderStatusBanner = () => {
+    if (!statusBanner?.message) return null;
+    const bannerStyles = {
+      error: { backgroundColor: '#7f1d1d', borderColor: '#f87171', textColor: '#f87171', icon: '⚠️ ' },
+      success: { backgroundColor: '#064e3b', borderColor: '#34d399', textColor: '#34d399', icon: '✅ ' },
+      info: { backgroundColor: '#1e3a8a', borderColor: '#60a5fa', textColor: '#60a5fa', icon: 'ℹ️ ' }
+    };
+    const style = bannerStyles[statusBanner.type] || bannerStyles.info;
+    return (
+      <View style={[styles.statusBanner, { backgroundColor: style.backgroundColor, borderColor: style.borderColor }]}>
+        <Text style={[styles.statusBannerText, { color: style.textColor }]}>
+          {style.icon}{statusBanner.message}
+        </Text>
+      </View>
+    );
+  };
+
+  const renderHostAuthCard = () => {
+    if (authView === 'login') {
+      return (
+        <View>
+          <Text style={styles.cardTitle}>Host Beta Sign In</Text>
+          <Text style={styles.label}>Email</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="your@email.com"
+            placeholderTextColor="#6b7280"
+            keyboardType="email-address"
+            autoCapitalize="none"
+            value={hostEmail}
+            onChangeText={setHostEmail}
+          />
+          <Text style={styles.label}>Password</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="Enter password..."
+            placeholderTextColor="#6b7280"
+            secureTextEntry
+            value={hostAuthPassword}
+            onChangeText={setHostAuthPassword}
+          />
+          <TouchableOpacity 
+            style={[styles.button, loading && styles.buttonDisabled]} 
+            onPress={onHostEmailLogin}
+            disabled={loading}
+          >
+            <Text style={styles.btnText}>Sign In</Text>
+          </TouchableOpacity>
+          <View style={styles.linkRow}>
+            <TouchableOpacity onPress={() => handleAuthViewChange('forgot_password')}>
+              <Text style={styles.linkText}>Forgot Password?</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => handleAuthViewChange('signup')}>
+              <Text style={styles.linkText}>New beta host? Create an account</Text>
+            </TouchableOpacity>
+          </View>
+          <TouchableOpacity style={{ marginTop: 15, alignItems: 'center' }} onPress={() => { setStatusBanner?.(null); setUserRole(null); }}>
+            <Text style={{ color: '#60a5fa' }}>← Back to Selection</Text>
+          </TouchableOpacity>
+        </View>
+      );
+    }
+
+    if (authView === 'signup') {
+      return (
+        <View>
+          <Text style={styles.cardTitle}>Create Beta Host Account</Text>
+          <Text style={styles.label}>Display Nickname</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="Your Display Name"
+            placeholderTextColor="#6b7280"
+            value={hostSignupNickname}
+            onChangeText={setHostSignupNickname}
+          />
+          <Text style={styles.label}>Email Address</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="your@email.com"
+            placeholderTextColor="#6b7280"
+            keyboardType="email-address"
+            autoCapitalize="none"
+            value={hostEmail}
+            onChangeText={setHostEmail}
+          />
+          <Text style={styles.label}>Password (min 6 chars)</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="Min 6 characters"
+            placeholderTextColor="#6b7280"
+            secureTextEntry
+            value={hostAuthPassword}
+            onChangeText={setHostAuthPassword}
+          />
+          <Text style={styles.label}>Beta Invite Code</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="e.g. BRIDGE2026"
+            placeholderTextColor="#6b7280"
+            autoCapitalize="characters"
+            value={hostInviteCode}
+            onChangeText={setHostInviteCode}
+          />
+          <TouchableOpacity 
+            style={[styles.button, loading && styles.buttonDisabled]} 
+            onPress={onHostEmailSignUp}
+            disabled={loading}
+          >
+            <Text style={styles.btnText}>Create Host Account</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={{ marginTop: 15, alignItems: 'center' }} onPress={() => handleAuthViewChange('login')}>
+            <Text style={{ color: '#60a5fa' }}>Already have an account? Sign In</Text>
+          </TouchableOpacity>
+        </View>
+      );
+    }
+
+    if (authView === 'verify_pending') {
+      return (
+        <View>
+          <Text style={styles.cardTitle}>Verify Your Email</Text>
+          <Text style={styles.bodyText}>
+            We sent a confirmation link to {hostEmail}. Click the link in your inbox to activate your host table access.
+          </Text>
+          <TouchableOpacity 
+            style={[styles.button, loading && styles.buttonDisabled]} 
+            onPress={onResendVerification}
+            disabled={loading}
+          >
+            <Text style={styles.btnText}>Resend Confirmation Email</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={{ marginTop: 15, alignItems: 'center' }} onPress={() => handleAuthViewChange('login')}>
+            <Text style={{ color: '#60a5fa' }}>← Back to Sign In</Text>
+          </TouchableOpacity>
+        </View>
+      );
+    }
+
+    if (authView === 'forgot_password') {
+      return (
+        <View>
+          <Text style={styles.cardTitle}>Reset Host Password</Text>
+          <Text style={styles.label}>Registered Email Address</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="your@email.com"
+            placeholderTextColor="#6b7280"
+            keyboardType="email-address"
+            autoCapitalize="none"
+            value={hostEmail}
+            onChangeText={setHostEmail}
+          />
+          <TouchableOpacity 
+            style={[styles.button, loading && styles.buttonDisabled]} 
+            onPress={onForgotPassword}
+            disabled={loading}
+          >
+            <Text style={styles.btnText}>Send Reset Link</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={{ marginTop: 15, alignItems: 'center' }} onPress={() => handleAuthViewChange('login')}>
+            <Text style={{ color: '#60a5fa' }}>← Back to Sign In</Text>
+          </TouchableOpacity>
+        </View>
+      );
+    }
+
+    return null;
+  };
+
   return (
     <>
       {!userRole && !currentRoom && (
@@ -62,27 +248,18 @@ export default function LobbyScreen({
 
       {userRole === 'host' && !currentRoom && (
         <View style={styles.card}>
+          {renderStatusBanner()}
           {!isHostAuthenticated ? (
-            <View>
-              <Text style={styles.cardTitle}>Host Verification</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="Enter Host Master Password..."
-                placeholderTextColor="#6b7280"
-                secureTextEntry
-                value={hostAuthPassword}
-                onChangeText={setHostAuthPassword}
-              />
-              <TouchableOpacity style={styles.button} onPress={onHostAuth}>
-                <Text style={styles.btnText}>Authenticate Host</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={{ marginTop: 15, alignItems: 'center' }} onPress={() => setUserRole(null)}>
-                <Text style={{ color: '#60a5fa' }}>← Back</Text>
-              </TouchableOpacity>
-            </View>
+            renderHostAuthCard()
           ) : (
             <View>
-              <Text style={styles.cardTitle}>Table Settings</Text>
+              <View style={styles.hostStatusBar}>
+                <Text style={styles.hostStatusText}>🟢 {authenticatedHostEmail || 'Verified Host'}</Text>
+                <TouchableOpacity style={styles.signOutButton} onPress={onHostSignOut}>
+                  <Text style={styles.signOutButtonText}>Sign Out</Text>
+                </TouchableOpacity>
+              </View>
+              <Text style={[styles.cardTitle, { marginTop: 16 }]}>Table Settings</Text>
               
               <Text style={styles.label}>Host Nickname</Text>
               <TextInput
@@ -93,16 +270,7 @@ export default function LobbyScreen({
                 onChangeText={setNickname}
               />
 
-              <Text style={styles.label}>3-Digit Room ID (e.g. 123)</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="123"
-                placeholderTextColor="#6b7280"
-                keyboardType="numeric"
-                maxLength={3}
-                value={roomNum}
-                onChangeText={setRoomNum}
-              />
+              <Text style={styles.infoText}>🎲 A unique 4-character Table Code will be generated automatically.</Text>
 
               <Text style={styles.label}>4-Digit Room Passcode (e.g. 4321)</Text>
               <TextInput
@@ -151,6 +319,7 @@ export default function LobbyScreen({
 
       {userRole === 'guest' && !currentRoom && (
         <View style={styles.card}>
+          {renderStatusBanner()}
           <Text style={styles.cardTitle}>Join Game Desk</Text>
 
           <Text style={styles.label}>Your Nickname</Text>
@@ -162,15 +331,15 @@ export default function LobbyScreen({
             onChangeText={setNickname}
           />
 
-          <Text style={styles.label}>3-Digit Room ID</Text>
+          <Text style={styles.label}>4-Character Table Code</Text>
           <TextInput
             style={styles.input}
-            placeholder="e.g. 123"
+            placeholder="e.g. K7M2"
             placeholderTextColor="#6b7280"
-            keyboardType="numeric"
-            maxLength={3}
-            value={joinRoomNum}
-            onChangeText={setJoinRoomNum}
+            autoCapitalize="characters"
+            maxLength={4}
+            value={joinRoomCode}
+            onChangeText={(text) => setJoinRoomCode(text.toUpperCase())}
           />
 
           <Text style={styles.label}>4-Digit Table Passcode</Text>
@@ -196,6 +365,7 @@ export default function LobbyScreen({
 
       {currentRoom && currentRoom.status === 'lobby' && (
         <View style={styles.cardWide}>
+          {renderStatusBanner()}
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
             <View style={{ flex: 1 }}>
               <Text style={styles.lobbyTitle}>Game Desk Number: <Text style={{ color: '#60a5fa' }}>{currentRoom.id}</Text></Text>
@@ -272,6 +442,65 @@ export default function LobbyScreen({
 }
 
 const styles = StyleSheet.create({
+  statusBanner: {
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 16,
+    borderWidth: 1
+  },
+  statusBannerText: {
+    fontWeight: '600',
+    fontSize: 14,
+    textAlign: 'center'
+  },
+  hostStatusBar: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 12,
+    backgroundColor: '#0f172a',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#374151',
+    marginBottom: 16
+  },
+  hostStatusText: {
+    color: '#10b981',
+    fontWeight: '600',
+    fontSize: 14
+  },
+  signOutButton: {
+    backgroundColor: '#dc2626',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 6
+  },
+  signOutButtonText: {
+    color: '#ffffff',
+    fontWeight: '600',
+    fontSize: 12
+  },
+  linkRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 12,
+    gap: 10
+  },
+  linkText: {
+    color: '#60a5fa',
+    fontSize: 14,
+    fontWeight: '500'
+  },
+  bodyText: {
+    color: '#9ca3af',
+    fontSize: 14,
+    textAlign: 'center',
+    marginBottom: 20,
+    lineHeight: 20
+  },
+  buttonDisabled: {
+    opacity: 0.5
+  },
   card: {
     backgroundColor: '#1e293b',
     padding: 24,
@@ -303,6 +532,14 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginBottom: 6,
     marginTop: 12
+  },
+  infoText: {
+    color: '#60a5fa',
+    fontSize: 13,
+    fontWeight: '500',
+    marginBottom: 12,
+    marginTop: 4,
+    fontStyle: 'italic'
   },
   input: {
     backgroundColor: '#0f172a',

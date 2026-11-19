@@ -5,6 +5,19 @@ class SoundManager {
   constructor() {
     this.ctx = null;
     this.muted = false;
+    if (typeof window !== 'undefined') {
+      this.bindGlobalUnlock();
+    }
+  }
+
+  bindGlobalUnlock() {
+    if (typeof window === 'undefined') return;
+    const unlockHandler = () => {
+      this.init();
+    };
+    window.addEventListener('touchstart', unlockHandler, { passive: true });
+    window.addEventListener('pointerdown', unlockHandler, { passive: true });
+    window.addEventListener('keydown', unlockHandler, { passive: true });
   }
 
   init() {

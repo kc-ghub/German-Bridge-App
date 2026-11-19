@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, Component } from 'react';
 import { 
   StyleSheet, 
   Text, 
@@ -11,7 +11,8 @@ import {
   Animated,
   Easing,
   Modal,
-  useWindowDimensions
+  useWindowDimensions,
+  Platform
 } from 'react-native';
 
 import { supabase } from './supabaseClient';
@@ -37,6 +38,81 @@ import { GameBoard } from './src/features/GameBoard';
 import LobbyScreen from './src/features/Lobby/LobbyScreen';
 
 const AnimatedTouchable = Animated.createAnimatedComponent(TouchableOpacity);
+
+// Web PWA viewport & overscroll protection
+useEffect(() => {
+  if (Platform.OS !== 'web' || typeof document === 'undefined') return;
+  
+  // Set viewport meta tag to prevent zoom
+  let viewportMeta = document.querySelector('meta[name="viewport"]');
+  if (!viewportMeta) {
+    viewportMeta = document.createElement('meta');
+    viewportMeta.name = 'viewport';
+    document.head.appendChild(viewportMeta);
+  }
+  viewportMeta.content = 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover';
+  
+  // Add Apple PWA meta tags
+  let appleCapable = document.querySelector('meta[name="apple-mobile-web-app-capable"]');
+  if (!appleCapable) {
+    appleCapable = document.createElement('meta');
+    appleCapable.name = 'apple-mobile-web-app-capable';
+    appleCapable.content = 'yes';
+    document.head.appendChild(appleCapable);
+  }
+  
+  let appleStatusBar = document.querySelector('meta[name="apple-mobile-web-app-status-bar-style"]');
+  if (!appleStatusBar) {
+    appleStatusBar = document.createElement('meta');
+    appleStatusBar.name = 'apple-mobile-web-app-status-bar-style';
+    appleStatusBar.content = 'black-translucent';
+    document.head.appendChild(appleStatusBar);
+  }
+  
+  // Prevent pull-to-refresh and double-tap zoom
+  document.documentElement.style.overscrollBehaviorY = 'none';
+  document.body.style.touchAction = 'manipulation';
+}, []);
+
+class ErrorBoundary extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error, errorInfo) {
+    console.error('ErrorBoundary caught:', error, errorInfo);
+  }
+
+  handleReset = () => {
+    if (typeof sessionStorage !== 'undefined') {
+      sessionStorage.clear();
+    }
+    if (typeof window !== 'undefined' && window.localStorage) {
+      window.localStorage.clear();
+    }
+    window.location.reload();
+  };
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <View style={styles.errorBoundaryContainer}>
+          <Text style={styles.errorBoundaryTitle}>⚠️ Runtime Error</Text>
+          <Text style={styles.errorBoundaryMessage}>{this.state.error?.message || 'An unexpected error occurred'}</Text>
+          <TouchableOpacity style={styles.errorBoundaryButton} onPress={this.handleReset}>
+            <Text style={styles.errorBoundaryButtonText}>Reset Session & Reload</Text>
+          </TouchableOpacity>
+        </View>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 // Session persistence helpers
 const saveSession = (key, val) => {
@@ -68,28 +144,36 @@ export default function App() {
   const [userRole, setUserRole] = useState(null); // 'host' | 'guest'
   
   // Host Password Verification
-  const [hostAuthPassword, setHostAuthPassword] = useState('');
   const [isHostAuthenticated, setIsHostAuthenticated] = useState(false);
 
   // Quick Room Setup Controls (Host)
-  const [roomNum, setRoomNum] = useState('');
   const [roomPasscode, setRoomPasscode] = useState('');
   const [maxPlayers, setMaxPlayers] = useState(4);
   const [roundMode, setRoundMode] = useState('mountain');
 
   // Invitee Join Form State (Guest)
-  const [joinRoomNum, setJoinRoomNum] = useState('');
+  const [joinRoomCode, setJoinRoomCode] = useState('');
   const [joinPasscode, setJoinPasscode] = useState('');
 
   // Active Game & Lobby State
   const [currentRoom, setCurrentRoom] = useState(null);
   const [players, setPlayers] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [errorLog, setErrorLog] = useState('');
+  const [statusBanner, setStatusBanner] = useState(null);
+  const setErrorLog = (msg) => setStatusBanner(msg ? { type: 'error', message: msg } : null);
   const [roundCountdown, setRoundCountdown] = useState(null);
+
+  // Host Auth Flow State
+  const [authView, setAuthView] = useState('login');
+  const [hostEmail, setHostEmail] = useState('');
+  const [hostAuthPassword, setHostAuthPassword] = useState('');
+  const [hostInviteCode, setHostInviteCode] = useState('');
+  const [hostSignupNickname, setHostSignupNickname] = useState('');
+  const [authenticatedHostEmail, setAuthenticatedHostEmail] = useState('');
 
   // Channel reference
   const channelRef = useRef(null);
+  const isLeavingRef = useRef(false);
   const currentRoomRef = useRef(currentRoom);
   currentRoomRef.current = currentRoom;
 
@@ -167,6 +251,10 @@ export default function App() {
         if (user) {
           setUserId(user.id);
 
+          if (!user.is_anonymous) {
+            await activateAndVerifyHost(user);
+          }
+
           const params = typeof window !== 'undefined' && window.location?.search 
             ? new URLSearchParams(window.location.search) 
             : null;
@@ -175,14 +263,14 @@ export default function App() {
 
           if (urlRoomId && savedSession && savedSession.roomId !== urlRoomId) {
             saveSession('active_game_session', null);
-            setJoinRoomNum(urlRoomId);
+            setJoinRoomCode(urlRoomId.trim().toUpperCase());
             setUserRole('guest');
             setCurrentRoom(null);
             return;
           }
 
           if (urlRoomId && !savedSession) {
-            setJoinRoomNum(urlRoomId);
+            setJoinRoomCode(urlRoomId.trim().toUpperCase());
             setUserRole('guest');
             return;
           }
@@ -203,11 +291,21 @@ export default function App() {
             }
           }
         }
-      } catch (err) {
-        setErrorLog(`Session initialization failed: ${err.message}`);
-      }
+    } catch (err) {
+      setErrorLog(`Session initialization failed: ${err.message}`);
     }
-    initSession();
+  }
+  initSession();
+}, []);
+
+  // Auth State Change Listener for automatic email-link login
+  useEffect(() => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if ((event === 'SIGNED_IN' || event === 'USER_UPDATED') && session?.user && !session.user.is_anonymous) {
+        await activateAndVerifyHost(session.user);
+      }
+    });
+    return () => subscription.unsubscribe();
   }, []);
 
   // Warn host before closing the browser tab/window in lobby
@@ -276,6 +374,7 @@ export default function App() {
       table: 'rooms',
       filter: `id=eq.${currentRoom.id}`
     }, (payload) => {
+      if (isLeavingRef.current) return;
       if (payload.new) {
         setCurrentRoom(payload.new);
       }
@@ -287,6 +386,7 @@ export default function App() {
       table: 'rooms',
       filter: `id=eq.${currentRoom.id}`
     }, () => {
+      if (isLeavingRef.current) return;
       alert('The table was closed by the host.');
       saveSession('active_game_session', null);
       setCurrentRoom(null);
@@ -417,32 +517,167 @@ export default function App() {
     prevActiveSeat.current = gs.activeSeat;
   }, [currentRoom?.game_state?.activeSeat, currentRoom?.game_state?.phase, userId, players]);
 
-  // 4. Host Authentication Handler ("funfam123999")
-  const handleHostAuth = async () => {
-    if (!hostAuthPassword.trim()) return;
-    await runWithLoading(async () => {
-      const { data: isValid, error } = await supabase.rpc('verify_host_password', { 
-        p_password: hostAuthPassword.trim() 
+  // Host Activation & Verification Helper
+  const activateAndVerifyHost = async (authUser) => {
+    const { data: canHost, error: claimErr } = await supabase.rpc('claim_host_access', { 
+      p_invite_code: hostInviteCode.trim() || null, 
+      p_nickname: hostSignupNickname.trim() || null 
+    });
+    
+    if (claimErr || !canHost) {
+      await supabase.auth.signOut();
+      const { data: anon } = await supabase.auth.signInAnonymously();
+      if (anon?.user) setUserId(anon.user.id);
+      setIsHostAuthenticated(false);
+      setAuthenticatedHostEmail('');
+      setAuthView('login');
+      setStatusBanner({ type: 'error', message: 'Email verified, but a valid Beta Invite Code is required to host tables.' });
+      return false;
+    }
+    
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('nickname')
+      .eq('id', authUser.id)
+      .single();
+    
+    if (profile?.nickname && !nickname.trim()) {
+      setNickname(profile.nickname);
+    }
+    
+    setUserId(authUser.id);
+    setAuthenticatedHostEmail(authUser.email || '');
+    setIsHostAuthenticated(true);
+    setStatusBanner(null);
+    return true;
+  };
+
+  // 4. Host Email/Password Login Handler
+  const handleHostEmailLogin = async () => {
+    if (!hostEmail.trim() || !hostAuthPassword.trim()) {
+      setStatusBanner({ type: 'error', message: 'Please enter both email and password.' });
+      return;
+    }
+    setLoading(true);
+    setStatusBanner(null);
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: hostEmail.trim(),
+        password: hostAuthPassword.trim()
       });
       if (error) throw error;
+      if (!data?.user) return;
+      
+      await activateAndVerifyHost(data.user);
+    } catch (err) {
+      setStatusBanner({ type: 'error', message: err.message });
+    } finally {
+      setLoading(false);
+    }
+  };
 
-      if (isValid) {
-        setIsHostAuthenticated(true);
-        setUserRole('host');
+  // 4b. Host Email/Password Sign-Up Handler
+  const handleHostEmailSignUp = async () => {
+    if (!hostSignupNickname.trim() || !hostEmail.trim() || !hostAuthPassword.trim() || hostAuthPassword.length < 6 || !hostInviteCode.trim()) {
+      setStatusBanner({ type: 'error', message: 'Please fill in all fields (nickname, email, password ≥6 chars, invite code).' });
+      return;
+    }
+    setLoading(true);
+    setStatusBanner(null);
+    try {
+      const { data, error } = await supabase.auth.signUp({
+        email: hostEmail.trim(),
+        password: hostAuthPassword,
+        options: {
+          emailRedirectTo: typeof window !== 'undefined' ? window.location.origin : undefined,
+          data: {
+            nickname: hostSignupNickname.trim(),
+            invite_code: hostInviteCode.trim(),
+          },
+        },
+      });
+      if (error) throw error;
+      
+      if (data?.session) {
+        await activateAndVerifyHost(data.user);
       } else {
-        setErrorLog('Incorrect Host Password.');
+        setAuthView('verify_pending');
+        setStatusBanner({ type: 'success', message: 'Confirmation link sent! Please check your inbox and verify your email.' });
       }
-    });
+    } catch (err) {
+      setStatusBanner({ type: 'error', message: err.message });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // 4c. Resend Verification Email Handler
+  const handleResendVerification = async () => {
+    if (!hostEmail.trim()) {
+      setStatusBanner({ type: 'error', message: 'Please enter your email address.' });
+      return;
+    }
+    setLoading(true);
+    setStatusBanner(null);
+    try {
+      const { error } = await supabase.auth.resend({ 
+        type: 'signup', 
+        email: hostEmail.trim(), 
+        options: { emailRedirectTo: typeof window !== 'undefined' ? window.location.origin : undefined } 
+      });
+      if (error) throw error;
+      setStatusBanner({ type: 'success', message: 'Verification email resent. Check your inbox or spam folder.' });
+    } catch (err) {
+      setStatusBanner({ type: 'error', message: err.message });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // 4d. Forgot Password Handler
+  const handleForgotPassword = async () => {
+    if (!hostEmail.trim()) {
+      setStatusBanner({ type: 'error', message: 'Please enter your email address.' });
+      return;
+    }
+    setLoading(true);
+    setStatusBanner(null);
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(hostEmail.trim(), { 
+        redirectTo: typeof window !== 'undefined' ? window.location.origin : undefined 
+      });
+      if (error) throw error;
+      setStatusBanner({ type: 'success', message: 'Password reset link sent if an account exists for this email.' });
+    } catch (err) {
+      setStatusBanner({ type: 'error', message: err.message });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // 4e. Host Sign Out Handler
+  const handleHostSignOut = async () => {
+    setLoading(true);
+    try {
+      await supabase.auth.signOut();
+      setIsHostAuthenticated(false);
+      setAuthenticatedHostEmail('');
+      setAuthView('login');
+      const { data: anon } = await supabase.auth.signInAnonymously();
+      if (anon?.user) setUserId(anon.user.id);
+      setStatusBanner({ type: 'info', message: 'Signed out of host account.' });
+    } catch (err) {
+      setStatusBanner({ type: 'error', message: err.message });
+    } finally {
+      setLoading(false);
+    }
   };
 
   // 5. Host Creates Game Table
   const handleCreateRoom = async () => {
+    isLeavingRef.current = false;
     if (!nickname.trim()) {
       setErrorLog('Please enter your host nickname.');
-      return;
-    }
-    if (roomNum.length !== 3 || isNaN(roomNum)) {
-      setErrorLog('Room ID must be exactly 3 numeric digits (e.g. 123).');
       return;
     }
     if (roomPasscode.length !== 4 || isNaN(roomPasscode)) {
@@ -453,9 +688,8 @@ export default function App() {
     await runWithLoading(async () => {
       const { data: room, error } = await supabase.rpc('create_quick_room', {
         p_host_id: userId,
-        p_nickname: nickname.trim(),
-        p_room_num: roomNum,
-        p_passcode: roomPasscode,
+        p_nickname: nickname.trim() || 'Host',
+        p_passcode: roomPasscode.trim(),
         p_max_players: parseInt(maxPlayers, 10),
         p_round_mode: roundMode
       });
@@ -474,12 +708,18 @@ export default function App() {
 
   // 6. Invitee Joins Game Table
   const handleJoinRoom = async () => {
+    isLeavingRef.current = false;
     if (!nickname.trim()) {
       setErrorLog('Please enter your nickname.');
       return;
     }
-    if (!joinRoomNum.trim() || !joinPasscode.trim()) {
-      setErrorLog('Please enter both Room Number and Passcode.');
+    const cleanCode = joinRoomCode.trim().toUpperCase();
+    if (!cleanCode || !joinPasscode.trim()) {
+      setErrorLog('Please enter both Table Code and Passcode.');
+      return;
+    }
+    if (!/^[A-Z0-9]{3,4}$/.test(cleanCode)) {
+      setErrorLog('Table Code must be 3-4 alphanumeric characters (e.g. K7M2).');
       return;
     }
 
@@ -487,11 +727,11 @@ export default function App() {
       const { data: room, error: roomError } = await supabase
         .from('rooms')
         .select('*')
-        .eq('id', joinRoomNum.trim())
+        .eq('id', cleanCode)
         .single();
 
       if (roomError || !room) {
-        throw new Error(`Room ${joinRoomNum.trim()} does not exist.`);
+        throw new Error(`Room ${cleanCode} does not exist.`);
       }
 
       if (room.status !== 'lobby') {
@@ -517,41 +757,39 @@ export default function App() {
 
   // 7. Leave Table Handler
   const handleLeaveTable = async () => {
+    isLeavingRef.current = true;
     const isHost = currentRoom && currentRoom.host_id === userId;
-
-    if (currentRoom.status === 'lobby') {
-      if (isHost) {
-        const confirmed = window.confirm(
-          'Warning: Leaving will close this table and remove all waiting players from the lobby. Are you sure you want to close the game?'
-        );
-        if (!confirmed) return;
-      }
-    } else if (currentRoom.status === 'playing') {
-      const confirmed = window.confirm('Are you sure you want to exit the game?');
-      if (!confirmed) return;
+    const roomId = currentRoom?.id;
+    
+    saveSession('active_game_session', null);
+    
+    if (typeof sessionStorage !== 'undefined') {
+      sessionStorage.removeItem('active_game_session');
     }
+    
+    if (typeof window !== 'undefined' && window.history && window.location) {
+      window.history.replaceState({}, '', window.location.pathname);
+    }
+    
+    if (channelRef.current) {
+      await channelRef.current.untrack();
+      supabase.removeChannel(channelRef.current);
+      channelRef.current = null;
+    }
+    
+    setCurrentRoom(null);
+    setPlayers([]);
+    setUserRole(null);
+    setLoading(false);
 
-    setLoading(true);
     try {
-      saveSession('active_game_session', null);
-
-      if (isHost && currentRoom.status === 'lobby') {
-        await supabase.from('rooms').delete().eq('id', currentRoom.id);
+      if (isHost && roomId) {
+        await supabase.from('rooms').delete().eq('id', roomId);
+      } else if (!isHost && roomId && userId) {
+        await supabase.from('room_players').delete().eq('room_id', roomId).eq('user_id', userId);
       }
-
-      if (channelRef.current) {
-        await channelRef.current.untrack();
-        supabase.removeChannel(channelRef.current);
-        channelRef.current = null;
-      }
-
-      setCurrentRoom(null);
-      setUserRole(null);
-      setPlayers([]);
     } catch (err) {
-      setErrorLog(err.message);
-    } finally {
-      setLoading(false);
+      console.error('Cleanup error during leave:', err);
     }
   };
 
@@ -890,43 +1128,67 @@ export default function App() {
   };
 
   return (
-    <ScrollView contentContainerStyle={styles.container}>
+    <ErrorBoundary>
+    <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
       <Text style={styles.title}>German Bridge 🃏</Text>
       <Text style={styles.subtitle}>Private Invitation Game Desk</Text>
 
-      {errorLog ? <Text style={styles.errorText}>⚠️ {errorLog}</Text> : null}
+      {statusBanner ? (
+        <Text style={[
+          styles.errorText, 
+          statusBanner.type === 'success' && { color: '#10b981' },
+          statusBanner.type === 'info' && { color: '#60a5fa' }
+        ]}>
+          {statusBanner.type === 'error' ? '⚠️ ' : statusBanner.type === 'success' ? '✅ ' : 'ℹ️ '}
+          {statusBanner.message}
+        </Text>
+      ) : null}
       {loading && <ActivityIndicator size="small" color="#60a5fa" style={{ marginBottom: 10 }} />}
 
       <LobbyScreen
         userRole={userRole}
         setUserRole={setUserRole}
+        statusBanner={statusBanner}
+        setStatusBanner={setStatusBanner}
+        errorLog={statusBanner?.message || ''}
+        authView={authView}
+        setAuthView={setAuthView}
+        hostEmail={hostEmail}
+        setHostEmail={setHostEmail}
         hostAuthPassword={hostAuthPassword}
         setHostAuthPassword={setHostAuthPassword}
+        hostInviteCode={hostInviteCode}
+        setHostInviteCode={setHostInviteCode}
+        hostSignupNickname={hostSignupNickname}
+        setHostSignupNickname={setHostSignupNickname}
+        authenticatedHostEmail={authenticatedHostEmail}
         isHostAuthenticated={isHostAuthenticated}
         nickname={nickname}
         setNickname={setNickname}
-        roomNum={roomNum}
-        setRoomNum={setRoomNum}
         roomPasscode={roomPasscode}
         setRoomPasscode={setRoomPasscode}
         maxPlayers={maxPlayers}
         setMaxPlayers={setMaxPlayers}
         roundMode={roundMode}
         setRoundMode={setRoundMode}
-        joinRoomNum={joinRoomNum}
-        setJoinRoomNum={setJoinRoomNum}
+        joinRoomCode={joinRoomCode}
+        setJoinRoomCode={setJoinRoomCode}
         joinPasscode={joinPasscode}
         setJoinPasscode={setJoinPasscode}
         currentRoom={currentRoom}
         players={players}
         userId={userId}
         loading={loading}
-        errorLog={errorLog}
-        onHostAuth={handleHostAuth}
+        onHostEmailLogin={handleHostEmailLogin}
+        onHostEmailSignUp={handleHostEmailSignUp}
+        onResendVerification={handleResendVerification}
+        onForgotPassword={handleForgotPassword}
+        onHostSignOut={handleHostSignOut}
         onCreateRoom={handleCreateRoom}
         onJoinRoom={handleJoinRoom}
         onStartGame={handleStartGame}
         onLeaveTable={handleLeaveTable}
+        onExit={handleLeaveTable}
         copyInviteLink={copyInviteLink}
         onOpenRules={() => setShowRulesModal(true)}
       />
@@ -950,7 +1212,7 @@ export default function App() {
           players={players}
           nickname={nickname}
           loading={loading}
-          errorLog={errorLog}
+          errorLog={statusBanner?.message || ''}
           roundCountdown={roundCountdown}
           trickHold={trickHold}
           selectedCardIdx={selectedCardIdx}
@@ -969,11 +1231,13 @@ export default function App() {
           onEndGame={handleEndGame}
           onResetToLobby={handleResetToLobby}
           onLeaveTable={handleLeaveTable}
+          onExit={handleLeaveTable}
           soundManager={soundManager}
           onOpenRules={() => setShowRulesModal(true)}
         />
       )}
     </ScrollView>
+    </ErrorBoundary>
   );
 }
 
@@ -993,4 +1257,9 @@ const styles = StyleSheet.create({
   cancelButton: { backgroundColor: '#dc2626', padding: 12, borderRadius: 8, alignItems: 'center', marginTop: 12 },
   btnText: { color: '#ffffff', fontWeight: '700', fontSize: 15 },
   errorText: { color: '#f87171', marginBottom: 15, fontWeight: '600', textAlign: 'center' },
+  errorBoundaryContainer: { flex: 1, backgroundColor: '#111827', alignItems: 'center', justifyContent: 'center', padding: 40 },
+  errorBoundaryTitle: { fontSize: 24, fontWeight: 'bold', color: '#f87171', marginBottom: 16, textAlign: 'center' },
+  errorBoundaryMessage: { fontSize: 16, color: '#ffffff', marginBottom: 24, textAlign: 'center' },
+  errorBoundaryButton: { backgroundColor: '#2563eb', padding: 14, borderRadius: 8, alignItems: 'center', width: '100%', maxWidth: 300 },
+  errorBoundaryButtonText: { color: '#ffffff', fontWeight: '700', fontSize: 15 },
 });
